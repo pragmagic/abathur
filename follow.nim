@@ -31,7 +31,7 @@ binHigherBound(a, lo, hi, x)
   return lo
 ]#
 
-proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
+proc rawSearchMin(key: Key; a: openArray[Key]; start, last: int): int =
   ## we search the maximal v in a such that 'key <? v' (key is still
   ## less than or equal to 'v'). If exclusive  <?  is '<'
   ## This algorithm with different boundary cases is what 'insert' needs to use!
@@ -45,6 +45,9 @@ proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
     else:
       le = mid + 1
   result = le
+
+proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
+  result = rawSearchMin(key, a, start, last)
   # boundary cases:
   if result > last: result = last
   elif result > 0 and cmp(a[result], key) != 0: dec result
@@ -52,6 +55,21 @@ proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
     # if the keys are identical and we require 'lt', we know
     # only the left branch is required:
     dec result
+
+proc searchMaxHelper(key: Key; a: openArray[Key]; start, last: int): int =
+  # we want to find the last index 'i' where a[i] is still 'key'
+  var ri = last
+  var le = start
+  result = start
+  while le <= ri:
+    let mid = le + (ri - le) div 2
+    assert mid >= start and mid <= last
+    if cmp(a[mid], key) == 0:
+      # still the same key, so move 'le'
+      le = mid + 1
+      result = mid  # remember this
+    else:
+      ri = mid - 1
 
 proc searchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
   var ri = last
@@ -65,12 +83,16 @@ proc searchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
       ri = mid - 1
   result = le
   # boundary cases:
-  if result > last: result = last
+  if result >= last:
+    result = last
+  else:
+    # we need the last entry that could possibly be meant:
+    result = searchMaxHelper(a[result], a, result, last)
   #elif result > 0 and cmp(a[result], key) == 0:
     # if the keys are identical and we require 'ge', we know
     # only the left branch is required:
   #  dec result
-  elif result > 0 and exclusive and cmp(a[result], key) <= 0:
+  if result > 0 and exclusive and cmp(a[result], key) == 0:
     dec result
   #elif result > 0 and not exclusive and cmp(a[result], key) < 0:
   #  dec result
@@ -91,7 +113,7 @@ proc follow(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
     if maxIsMin in wanted.options:
       if cmp(keys[result[1]], wanted.b) > 0: dec result[1]
   else:
-    result[1] = keys.high
+    result[1] = last
 
 proc binaryFind[T](v: openarray[T], key: T; last: int): int =
   var

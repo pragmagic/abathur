@@ -64,16 +64,22 @@ proc main2 =
     doAssert follow(Interval(a: -1, b: 90, options: {maxIsInf}), keys) == (0, 8)
     doAssert follow(Interval(a: 88, b: 90, options: {maxIsInf}), keys) == (5, 8)
 
-  when false:
+  when true:
     echo "dup tests!"
     # now do the same with duplicate keys:
-    #      unused  1   2   3   4   5   6    7    8
+    #      unused  1   2   3   4   5   6   7   8
     let keys = [0, 0, 12, 12, 12, 12, 12, 12, 12]
     doAssert follow(Interval(a: 0, b: 100, options: {maxExcluded}), keys) == (1, 8)
 
     doAssert follow(Interval(a: 0, b: 12, options: {}), keys) == (1, 8)
-    #doAssert follow(Interval(a: 12, b: 12, options: {maxIsMin}), keys) == (2, 8)
+    doAssert follow(Interval(a: 12, b: 12, options: {maxIsMin}), keys) == (2, 8)
 
+    doAssert follow(Interval(a: -1, b: -1, options: {maxIsMin}), keys) == (0, 0)
+    doAssert follow(Interval(a: 5000, b: 10000, options: {}), keys) == (8, 8)
+    doAssert follow(Interval(a: 12, b: 20, options: {}), keys) == (2, 8)
+    doAssert follow(Interval(a: 13, b: 20, options: {}), keys) == (8, 8)
+
+    doAssert follow(Interval(a: 0, b: 90, options: {maxIsInf}), keys) == (1, 8)
 
   block:
     #            0  1   2   3   4   5   6    7    8
