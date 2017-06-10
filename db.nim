@@ -97,18 +97,19 @@ when isMainModule:
     db.relations[tax] = newBTree(y.id, strTy, intTy, cmpStrings, pm)
     unpin(y)
 
-    db.relations[salary].put("Angelika", 7000)
-    db.relations[salary].put("Annette", 4000)
-    db.relations[salary].put("Ariane", 3000)
+    const query = """
+insert salary("Angelika", 7000)
+insert salary("Annette", 4000)
+insert salary("Ariane", 3000)
 
-    db.relations[tax].put("Annette", 200)
-    db.relations[tax].put("Ariane", 100)
-    db.relations[tax].put("Angelika", 50)
+insert tax("Annette", 200)
+insert tax("Ariane", 100)
+insert tax("Angelika", 50)
 
-    const query = """select ?rid, ?sid
+select ?rid, ?sid
 where:
-  ?rsalary > ?ssalary
-  ?rtax < ?stax
+  ?rsalary < ?ssalary
+  ?rtax > ?stax
   salary(?sid, ?ssalary)
   salary(?rid, ?rsalary)
   tax(?sid, ?stax)

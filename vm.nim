@@ -10,6 +10,7 @@ type
   Value = SepValue
   QStmtKind* = enum
     nkEmpty,
+    nkQueryList, # a list of queries
     nkLit,
     nkRelation, # only for queries, not for the VM
     nkProc, # can do things like 'x + 1' or something else with a single value
@@ -41,7 +42,7 @@ type
     of nkVarDef, nkVarUse:
       varId: VarId
     of nkValues, nkKeys, nkPairs:
-      tree: BTree
+      src: int  # id of the BTree
       cond: BTreeQuery
     else: kids: seq[QStmt]
     typ: TypeDesc
@@ -54,12 +55,23 @@ type
     bindings: array[VarId, PinnedValue]
     vartypes: array[VarId, TypeDesc]
 
+  Db* = object
+    relations*: array[50, BTree]
+
 proc `[]`*(n: Qstmt; i: int): QStmt {.inline.} = n.kids[i]
 proc len*(n: QStmt): int {.inline.} = n.kids.len
 proc add*(n, kid: QStmt) {.inline.} = n.kids.add(kid)
 iterator items*(n: QStmt): QStmt =
   for i in 0..<n.len: yield n[i]
 proc `lastSon=`*(n, kid: QStmt) = n.kids[^1] = kid
+
+proc checkSameType(a, b: TypeDesc) =
+  if a.kind == tyNone or b.kind == tyNone:
+    quit "type mismatch"
+  elif a.kind == b.kind and a.id == b.id:
+    discard
+  else:
+    quit "type mismatch"
 
 proc toString(n: QStmt, indent: string; result: var string) =
   result.add indent
@@ -140,13 +152,26 @@ proc unpinVars(p: Plan) =
     let n = x.n
     if n != nil: unpin(n)
 
-proc exec(p: Plan; it: QStmt) =
+proc exec(db: var DB; p: Plan; it: QStmt) =
   ## we can also translate a query plan at compile-time to a Nim program.
+
+  template tree(iter: QStmt): untyped = db.relations[iter.src]
+
   case it.kind
+  of nkQueryList:
+    for x in it: exec(db, p, x)
+  of nkInsert:
+    assert it[0].kind == nkRelation
+    let r = it[0].rid
+    checkSameType(db.relations[r].layout.keyDesc, it[1].typ)
+    checkSameType(db.relations[r].layout.valDesc, it[2].typ)
+    let a = evalVal(p, it[1])
+    let b = evalVal(p, it[2])
+    db.relations[r].put(a, b)
   of nkFor:
     let iter = it[^2]
     let body = it[^1]
-    var c = initQCursor(iter.tree)
+    var c = initQCursor(db.relations[iter.src])
     case iter.kind
     of nkValues:
       let cond = newBTreeQueryEq(SepValue p.bindings[it[0].varId].p)
@@ -155,7 +180,7 @@ proc exec(p: Plan; it: QStmt) =
         next(c, iter.tree, cond)
         if atEnd(c): break
         bindVar p, valId, getPinnedVal(c, iter.tree)
-        exec(p, body)
+        exec(db, p, body)
     of nkKeys:
       let keyId = it[0].varId
       let wanted = p.bindings[it[0].varId].p
@@ -164,7 +189,7 @@ proc exec(p: Plan; it: QStmt) =
         if atEnd(c): break
         if it.compare(getVal(c, iter.tree), wanted, p.pager) == 0:
           bindVar p, keyId, getPinnedKey(c, iter.tree)
-          exec(p, body)
+          exec(db, p, body)
     of nkPairs:
       let keyId = it[0].varId
       let valId = it[1].varId
@@ -173,7 +198,7 @@ proc exec(p: Plan; it: QStmt) =
         if atEnd(c): break
         bindVar p, keyId, getPinnedKey(c, iter.tree)
         bindVar p, valId, getPinnedVal(c, iter.tree)
-        exec(p, body)
+        exec(db, p, body)
     else:
       doAssert(false, "invalid for loop iterator")
   of nkYield:
@@ -182,7 +207,7 @@ proc exec(p: Plan; it: QStmt) =
   of nkIf:
     let cond = it[0]
     let body = it[1]
-    if evalBool(p, cond): exec(p, body)
+    if evalBool(p, cond): exec(db, p, body)
   of nkAsgn:
     assert it[0].kind == nkVarDef
     let varId = it[0].varId
@@ -237,10 +262,6 @@ proc lit*(x: string): QStmt =
   result.typ.kind = tyString
   result.typ.size = byte 255
 #  result.compare = cmpStrings
-
-type
-  Db* = object
-    relations*: array[50, BTree]
 
 proc nested(s: seq[QStmt]): QStmt =
   result = s[0]
@@ -304,16 +325,10 @@ proc reorder(q: QStmt): QStmt =
       result.add nil
       moveup(result, n)
 
-proc checkSameType(a, b: TypeDesc) =
-  if a.kind == b.kind and a.id == b.id:
-    discard
-  else:
-    quit "type mismatch"
-
 proc annotateTypes(q: QStmt; plan: Plan) =
   case q.kind
   of nkValues, nkKeys, nkPairs, nkCall, nkAsgn, nkProc, nkRelation, nkEmpty,
-     nkPred, nkCreateTable, nkInsert: discard
+     nkPred, nkCreateTable, nkInsert, nkQueryList: discard
   of nkLit:
     assert q.typ.kind != tyNone
     q.compare = typeToCmp(q.typ.kind)
@@ -362,7 +377,7 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
       let obj = n[2].varId
       var iter = atom(nkPairs)
       let pred = n[0].rid
-      iter.tree = db.relations[pred]
+      iter.src = pred
       if subj in bound:
         if obj in bound:
           # if both are already bound, it is another 'if' constraint that
@@ -379,9 +394,15 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
       else:
         # XXX Collect additional constraints here!
         iter.cond = BTreeQuery(op: opTrue)
-      # XXX perform type checking here!
-      plan.vartypes[subj] = iter.tree.layout.keyDesc
-      plan.vartypes[obj] = iter.tree.layout.valDesc
+      let layout = db.relations[iter.src].layout
+      if plan.vartypes[subj].kind == tyNone:
+        plan.vartypes[subj] = layout.keyDesc
+      else:
+        checkSameType(plan.vartypes[subj], layout.keyDesc)
+      if plan.vartypes[obj].kind == tyNone:
+        plan.vartypes[obj] = layout.valDesc
+      else:
+        checkSameType(plan.vartypes[obj], layout.valDesc)
       # empty will be filled later by the 'nested' pass:
       res.add tree(nkFor, ?!subj, ?!obj, iter, atom(nkEmpty))
       incl(bound, subj)
@@ -395,12 +416,23 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
   result = nested(res)
   annotateTypes(result, plan)
 
-proc run*(q: Query; db: Db; a: Action) =
+proc tqueries(n: Query; db: Db; p: Plan): QStmt =
+  case n.kind
+  of nkSelect:
+    result = compile(n, db, p)
+  of nkQueryList:
+    result = n
+    for i in 0..<n.len:
+      n.kids[i] = tqueries(n.kids[i], db, p)
+  else:
+    result = n
+
+proc run*(q: Query; db: var Db; a: Action) =
   var p = Plan()
   p.action = a
-  let it = compile(q, db, p)
-  #echo "Plan ", it
-  exec(p, it)
+  let r = tqueries(q, db, p)
+  #echo "Plan ", r
+  exec(db, p, r)
 
 when isMainModule:
   var pageMgr: PageMgr
