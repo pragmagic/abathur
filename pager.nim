@@ -360,8 +360,12 @@ type
     s: byte # always < 255
     b: array[254, byte]
 ]#
+
+const
+  sizeOverflow = 255
+
 proc allocTempString*(p: pointer; size: int): SepValue =
-  if size < 255:
+  if size < sizeOverflow:
     result = allocMem(SepValue, size+1)
     let r = result.pointer
     storeByte(r, byte(size))
@@ -369,7 +373,7 @@ proc allocTempString*(p: pointer; size: int): SepValue =
   else:
     result = allocMem(SepValue, size+16)
     let r = result.pointer
-    storeByte(r, 255)
+    storeByte(r, sizeOverflow)
     storeInt32(r +! 4, size.int32)
     storeInt64(r +! 8, 0)
     storeMem(r +! 16, p, size)
@@ -399,20 +403,20 @@ declareToSepValue(float64)
 
 proc storeString(p: pointer; size: int; s: pointer; slen: int32;
                  pm: Pager) =
-  assert size >= 16 and size <= 256
+  assert size >= 16 and size <= (sizeOverflow+1)
   if slen < size:
     # store as a short string:
     storeByte(p, byte(slen))
     storeMem(p +! 1, s, slen)
   else:
-    storeByte(p, 255)
+    storeByte(p, sizeOverflow)
     storeInt32(p +! 4, slen)
     let z = storeVla(pm, s, slen)
     storeInt64(p +! 8, int64(z))
 
 template extract(a, alen, adat) =
   alen = (type(alen)) fetchByte(a)
-  if alen < 255:
+  if alen < sizeOverflow:
     # short string:
     adat = a +! 1
   else:
@@ -443,7 +447,7 @@ proc addEntry*(s: var string; p: pointer; typ: TypeDesc; pm: Pager) =
   of tyString, tyUserVar:
     var size = int(fetchByte(p))
     var q = p +! 1
-    if size == 255:
+    if size == sizeOverflow:
       size = fetchInt32(p +! 4)
       let z = fetchInt64(p +! 8)
       if z != 0:

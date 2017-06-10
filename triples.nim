@@ -6,7 +6,6 @@ type
 
 const
   tripleAlign = 8
-  sizeOverflow = 255
 
 proc allocTriple*(sizeA, sizeB, sizeC: int): SepValue =
   template fullSize(size): untyped =
