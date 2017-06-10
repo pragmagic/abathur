@@ -32,6 +32,8 @@ proc follow(wanted: Interval; keys: openArray[Key]): (int, int) =
 proc matches(wanted: Interval; keys: openArray[Key]): (int, int) =
   result = matches(wanted, keys, keys.high)
 
+proc isEmpty(t: (int, int)): bool = t[0] > t[1]
+
 proc main2 =
   block:
     #      unused  1   2   3   4   5   6    7    8
@@ -82,6 +84,7 @@ proc main2 =
     doAssert follow(Interval(a: 0, b: 90, options: {maxIsInf}), keys) == (1, 8)
 
   block:
+    echo "matches tests!"
     #            0  1   2   3   4   5   6    7    8
     let keys = [-1, 0, 12, 14, 66, 88, 90, 100, 1000]
     doAssert matches(Interval(a: 12, b: 12, options: {maxIsMin}), keys) == (2, 2)
@@ -98,7 +101,7 @@ proc main2 =
 
     doAssert matches(Interval(a: -1, b: 88, options: {maxExcluded}), keys) == (0, 4)
 
-    doAssert matches(Interval(a: 13, b: 13, options: {maxIsMin}), keys) == (4, -1)
+    doAssert(isEmpty matches(Interval(a: 13, b: 13, options: {maxIsMin}), keys))
 
     doAssert matches(Interval(a: -12, b: 13, options: {}), keys) == (0, 2)
     doAssert matches(Interval(a: -12, b: 88, options: {}), keys) == (0, 5)
@@ -120,10 +123,33 @@ proc main2 =
 
     doAssert matches(Interval(a: -1, b: 90, options: {maxIsInf}), keys) == (0, 8)
     doAssert matches(Interval(a: 88, b: 90, options: {}), keys) == (5, 6)
-    doAssert matches(Interval(a: 1200, b: 0, options: {maxIsInf}), keys) == (9, 8)
-    doAssert matches(Interval(a: 1200, b: 2000, options: {}), keys) == (9, 8)
-    doAssert matches(Interval(a: -3200, b: -300, options: {minIsInf}), keys) == (0, -1)
-    doAssert matches(Interval(a: -3200, b: -300, options: {}), keys) == (0, -1)
+    doAssert(isEmpty matches(Interval(a: 1200, b: 0, options: {maxIsInf}), keys))
+    doAssert(isEmpty matches(Interval(a: 1200, b: 2000, options: {}), keys))
+    doAssert(isEmpty matches(Interval(a: -3200, b: -300, options: {minIsInf}), keys))
+    doAssert(isEmpty matches(Interval(a: -3200, b: -300, options: {}), keys))
+
+  block:
+    #            0  1   2   3   4   5   6    7    8
+    let keys = [-1, 0, 12, 12, 66, 66, 66, 100, 1000]
+    doAssert matches(Interval(a: 12, b: 12, options: {maxIsMin}), keys) == (2, 3)
+    doAssert matches(Interval(a: 0, b: 100, options: {}), keys) == (1, 7)
+
+    doAssert matches(Interval(a: 0, b: 100, options: {maxExcluded}), keys) == (1, 6)
+    doAssert matches(Interval(a: 0, b: 70, options: {}), keys) == (1, 6)
+
+    doAssert matches(Interval(a: 12, b: 500, options: {}), keys) == (2, 7)
+    doAssert matches(Interval(a: 12, b: 99, options: {}), keys) == (2, 6)
+    doAssert matches(Interval(a: 12, b: 100, options: {}), keys) == (2, 7)
+    doAssert matches(Interval(a: 12, b: 101, options: {}), keys) == (2, 7)
+    doAssert matches(Interval(a: 12, b: 66, options: {}), keys) == (2, 6)
+
+    doAssert matches(Interval(a: -1, b: 66, options: {maxExcluded}), keys) == (0, 3)
+    doAssert(isEmpty matches(Interval(a: 13, b: 13, options: {maxIsMin}), keys))
+    doAssert matches(Interval(a: -12, b: 13, options: {}), keys) == (0, 3)
+    doAssert(isEmpty matches(Interval(a: -3200, b: -300, options: {minIsInf}), keys))
+    doAssert(isEmpty matches(Interval(a: -3200, b: -300, options: {}), keys))
+    doAssert(isEmpty matches(Interval(a: -3200, b: -300, options: {maxExcluded}), keys))
+
   echo "Yes."
 
 proc main =

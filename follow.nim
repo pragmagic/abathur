@@ -115,52 +115,68 @@ proc follow(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
   else:
     result[1] = last
 
-proc binaryFind[T](v: openarray[T], key: T; last: int): int =
-  var
-    le = 0
-    ri = last
+proc binaryFind(v: openarray[Key], key: Key; last: int): int =
+  result = rawSearchMin(key, v, 0, last)
+  if result < 0 or result > last or cmp(v[result], key) != 0:
+    # not found:
+    result = -1
+
+proc matchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
+  assert start >= 0
+  var ri = last
+  var le = start
   while le <= ri:
-    let probe = (le + ri) div 2
-    let cmp = cmp(v[probe], key)
-    if cmp < 0:
-      le = probe + 1
-    elif cmp > 0:
-      ri = probe - 1
+    let mid = le + (ri - le) div 2
+    assert mid >= start and mid <= last
+    if cmp(a[mid], key) < 0:
+      le = mid + 1
     else:
-      return probe
-  result = -(le + 1)
+      ri = mid - 1
+  result = le
+  # boundary cases:
+  if result >= last:
+    result = last
+  else:
+    # we need the last entry that could possibly be meant:
+    result = searchMaxHelper(a[result], a, result, last)
+  if exclusive:
+    while result > start and cmp(a[result], key) == 0: dec result
+  while result >= start and cmp(a[result], key) > 0: dec result
 
 proc matches(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
   assert cmp(wanted.a, wanted.b) != 0 or maxIsMin in wanted.options
   if maxIsMin in wanted.options:
     let x = binaryFind(keys, wanted.a, last)
     if x < 0: return (abs(x), -1)
-    return (x, x)
+    return (x, searchMaxHelper(keys[x], keys, x, last))
 
   if minIsInf notin wanted.options:
     result[0] = max(binaryFind(keys, wanted.a, last), 0)
     # could still be a non-match though:
     if minExcluded in wanted.options:
       let c = cmp(keys[result[0]], wanted.a)
-      if c < 0: result[0] = keys.len
+      if c < 0: result[0] = last+1
       elif c == 0: inc result[0]
     else:
-      if cmp(keys[result[0]], wanted.a) < 0: result[0] = keys.len
+      if cmp(keys[result[0]], wanted.a) < 0: result[0] = last+1
     #searchMin(wanted.a, keys, 0, minExcluded in wanted.options)
   else:
     result[0] = 0
   if maxisInf notin wanted.options:
-    result[1] = binaryFind(keys, wanted.b, last)
-    if result[1] >= 0:
-      if maxExcluded in wanted.options:
-        let c = cmp(wanted.b, keys[result[1]])
-        if c < 0: result[1] = -2
-        elif c == 0: dec result[1]
+    result[1] = matchMax(wanted.b, keys, result[0], last,
+                                    maxExcluded in wanted.options) #binaryFind(keys, wanted.b, last)
+    when false:
+      if result[1] >= 0:
+        result[1] = searchMaxHelper(keys[result[1]], keys, result[1], last)
+        if maxExcluded in wanted.options:
+          let c = cmp(wanted.b, keys[result[1]])
+          if c < 0: result[1] = -2
+          elif c == 0: dec result[1]
+        else:
+          if cmp(wanted.b, keys[result[1]]) < 0: result[1] = -2
       else:
-        if cmp(wanted.b, keys[result[1]]) < 0: result[1] = -2
-    else:
-      result[1] = abs(result[1])-2
+        result[1] = abs(result[1])-2
     #result[1] = searchMax(wanted.b, keys, result[0],
     #                      maxExcluded in wanted.options)
   else:
-    result[1] = keys.high
+    result[1] = last
