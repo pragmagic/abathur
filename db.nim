@@ -1,13 +1,10 @@
 #[
-Karax DB: Design
-
 TODO:
   - finish query transformator
   - allow to declare new BTree relations
-  - port Nim lexer/parser to create real query language
   - patch Nim JS codegen to produce efficient packed
     memory layout using TypedArrays.
-  - make transactor.nim use Karax DB.
+  - make transactor.nim use Abathur.
 
 
 Interesting self-query:
@@ -46,7 +43,7 @@ Nim DSL or else are compiled into an AST.
 ]#
 
 import marshal, streams, os
-import pager, btree
+import pager, btree, vm, parser
 
 # We need SPO, POS, OSP, OPS
 # Subject: int64 (or flexible typed)
@@ -66,46 +63,104 @@ import pager, btree
 # then store the valid flag as well as the logical timestamp.
 # --> covering index means we don't have duplicate keys.
 
-type
-  RelId = distinct int32
-  Rel = object
-    id: RelId
-    keyType, valType: TypeDesc
-    name: string
-  IndexRel = object
-    id: RelId
-    offsets: seq[byte] ## offsets into the Rel we seek to index
-                       ## but for partial indexes we need to be
-                       ## able to store (byte; ValueA..ValueB) information
-                       ## too complex solution
-                       ## --> instead: use an 'on insert trigger'.
-  DbDesc = object
-    maxPageId: PageId
-    rels: seq[Rel]
+when isMainModule:
+  var pageMgr: PageMgr
+  initPageMgr(addr pageMgr, 1, ".")
 
-  Db = object
-    desc: DbDesc
-    pm: PageMgr
-#    indexes: seq[IndexRel]
+  const
+    salary = 0
+    tax = 1
+    rid = 0
+    sid = 1
 
-proc error(msg: string) = quit(msg)
+  proc output(results: array[VarId, PinnedValue]; types: array[VarId, TypeDesc]) =
+    let pm = addr(pageMgr)
+    var s = ""
+    addEntry(s, results[rid].p, types[rid], pm)
+    s.add " earns less than "
+    addEntry(s, results[sid].p, types[sid], pm)
+    s.add " but pays more taxes"
+    echo s
 
-proc open*(db: var Db; dir: string; maxMem = 1024 * 1024 * 32) =
-  let root = newFileStream(dir / rootFilename, fmRead)
-  if root != nil:
-    marshal.load(root, db.desc)
-    root.close()
-  else:
-    db.desc.maxPageId = 1
-    db.desc.rels = @[]
-  initPageMgr(addr db.pm, db.desc.maxPageId, dir, maxMem)
+  proc testA() =
+    let pm = addr(pageMgr)
+    var attrMap = createPredicateMap(("salary", salary), ("tax", tax))
 
-proc close*(db: var Db) =
-  db.desc.maxPageId = db.pm.maxPageId
-  storeDirtyPages(addr db.pm)
-  let root = newFileStream(db.pm.dir / rootFilename, fmWrite)
-  if root != nil:
-    marshal.store(root, db.desc)
-    root.close()
-  else:
-    error "cannot store root data structure"
+    var db = Db()
+    let strTy = TypeDesc(kind: tyString, size: 16)
+    let intTy = TypeDesc(kind: tyInt32, size: 4)
+    let x = pinFreshNode(pm)
+    db.relations[salary] = newBTree(x.id, strTy, intTy, cmpStrings, pm)
+    unpin(x)
+
+    let y = pinFreshNode(pm)
+    db.relations[tax] = newBTree(y.id, strTy, intTy, cmpStrings, pm)
+    unpin(y)
+
+    db.relations[salary].put("Angelika", 7000)
+    db.relations[salary].put("Annette", 4000)
+    db.relations[salary].put("Ariane", 3000)
+
+    db.relations[tax].put("Annette", 200)
+    db.relations[tax].put("Ariane", 100)
+    db.relations[tax].put("Angelika", 50)
+
+    const query = """select ?rid, ?sid
+where:
+  ?rsalary > ?ssalary
+  ?rtax < ?stax
+  salary(?sid, ?ssalary)
+  salary(?rid, ?rsalary)
+  tax(?sid, ?stax)
+  tax(?rid, ?rtax)
+"""
+    let myq = parse(attrMap, query)
+    myq.run(db, output)
+
+  testA()
+
+
+when false:
+  type
+    RelId = distinct int32
+    Rel = object
+      id: RelId
+      keyType, valType: TypeDesc
+      name: string
+    IndexRel = object
+      id: RelId
+      offsets: seq[byte] ## offsets into the Rel we seek to index
+                        ## but for partial indexes we need to be
+                        ## able to store (byte; ValueA..ValueB) information
+                        ## too complex solution
+                        ## --> instead: use an 'on insert trigger'.
+    DbDesc = object
+      maxPageId: PageId
+      rels: seq[Rel]
+
+    Db = object
+      desc: DbDesc
+      pm: PageMgr
+  #    indexes: seq[IndexRel]
+
+  proc error(msg: string) = quit(msg)
+
+  proc open*(db: var Db; dir: string; maxMem = 1024 * 1024 * 32) =
+    let root = newFileStream(dir / rootFilename, fmRead)
+    if root != nil:
+      marshal.load(root, db.desc)
+      root.close()
+    else:
+      db.desc.maxPageId = 1
+      db.desc.rels = @[]
+    initPageMgr(addr db.pm, db.desc.maxPageId, dir, maxMem)
+
+  proc close*(db: var Db) =
+    db.desc.maxPageId = db.pm.maxPageId
+    storeDirtyPages(addr db.pm)
+    let root = newFileStream(db.pm.dir / rootFilename, fmWrite)
+    if root != nil:
+      marshal.store(root, db.desc)
+      root.close()
+    else:
+      error "cannot store root data structure"

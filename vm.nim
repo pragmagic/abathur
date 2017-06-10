@@ -5,10 +5,10 @@ const
   MaxVars = 50
 
 type
-  VarId = range[0..MaxVars-1]
+  VarId* = range[0..MaxVars-1]
 
   Value = SepValue
-  QStmtKind = enum
+  QStmtKind* = enum
     nkEmpty,
     nkLit,
     nkRelation, # only for queries, not for the VM
@@ -23,6 +23,8 @@ type
     nkFor,
     nkYield,  # also an alias for 'select'
     nkIf,
+    nkInsert,
+    nkCreateTable,
     nkSelect, # a 'select' statement is a pair of (nkYield,nkAnd(cond list))
     nkPred,   # a triple like '?subj pred ?obj'; pred comes first though
     nkLt, nkLe, nkEq, nkNeq, nkGt, nkGe,
@@ -30,7 +32,7 @@ type
 
 type
   QStmt* = ref object
-    case kind: QStmtKind
+    case kind*: QStmtKind
     of nkEmpty: discard
     of nkLit:
       v: Value
@@ -197,7 +199,7 @@ proc exec(p: Plan; it: QStmt) =
 type
   Query = QStmt # we're lazy and use the same internal representation for both
 
-proc tree(k: QStmtKind; kids: varargs[QStmt]): QStmt =
+proc tree*(k: QStmtKind; kids: varargs[QStmt]): QStmt =
   new result
   result.kind = k
   result.kids = newSeq[QStmt](kids.len)
@@ -208,11 +210,11 @@ proc atom(k: QStmtKind): QStmt =
   new result
   result.kind = k
 
-proc rel(relation: int): QStmt =
+proc rel*(relation: int): QStmt =
   result = atom(nkRelation)
   result.rid = relation
 
-proc `?`(x: VarId): QStmt =
+proc `?`*(x: VarId): QStmt =
   result = atom(nkVarUse)
   result.varId = x
 
@@ -220,13 +222,25 @@ proc `?!`(x: VarId): QStmt =
   result = atom(nkVarDef)
   result.varId = x
 
-proc lit(x: Value): QStmt =
+proc lit*(x: Value): QStmt =
   result = atom(nkLit)
   result.v = x
 
+proc lit*(x: int64): QStmt =
+  result = lit(allocInt32(int32 x))
+  result.typ.kind = tyInt32
+  result.typ.size = byte sizeof(int32)
+#  result.compare = cmpInt64
+
+proc lit*(x: string): QStmt =
+  result = lit(allocTempString(x))
+  result.typ.kind = tyString
+  result.typ.size = byte 255
+#  result.compare = cmpStrings
+
 type
-  Db = object
-    relations: array[50, BTree]
+  Db* = object
+    relations*: array[50, BTree]
 
 proc nested(s: seq[QStmt]): QStmt =
   result = s[0]
@@ -298,7 +312,8 @@ proc checkSameType(a, b: TypeDesc) =
 
 proc annotateTypes(q: QStmt; plan: Plan) =
   case q.kind
-  of nkValues, nkKeys, nkPairs, nkCall, nkAsgn, nkProc, nkRelation, nkEmpty, nkPred: discard
+  of nkValues, nkKeys, nkPairs, nkCall, nkAsgn, nkProc, nkRelation, nkEmpty,
+     nkPred, nkCreateTable, nkInsert: discard
   of nkLit:
     assert q.typ.kind != tyNone
     q.compare = typeToCmp(q.typ.kind)
@@ -380,7 +395,7 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
   result = nested(res)
   annotateTypes(result, plan)
 
-proc run(q: Query; db: Db; a: Action) =
+proc run*(q: Query; db: Db; a: Action) =
   var p = Plan()
   p.action = a
   let it = compile(q, db, p)

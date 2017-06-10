@@ -378,6 +378,14 @@ proc allocTempString*(p: pointer; size: int): SepValue =
     storeInt64(r +! 8, 0)
     storeMem(r +! 16, p, size)
 
+proc allocInt64*(i: int64): SepValue =
+  result = allocMem(SepValue, sizeof(int64))
+  storeInt64(pointer result, i)
+
+proc allocInt32*(i: int32): SepValue =
+  result = allocMem(SepValue, sizeof(int32))
+  storeInt32(pointer result, i)
+
 proc allocTempString*(s: string): SepValue =
   result = allocTempString(unsafeAddr(s[0]), s.len)
 
