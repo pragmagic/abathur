@@ -87,6 +87,8 @@ when isMainModule:
     var attrMap = createPredicateMap(("salary", salary), ("tax", tax))
 
     var db = Db()
+    db.relations = @[]
+    db.relations.setLen 2
     let strTy = TypeDesc(kind: tyString, size: 16)
     let intTy = TypeDesc(kind: tyInt32, size: 4)
     let x = pinFreshNode(pm)

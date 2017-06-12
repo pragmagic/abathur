@@ -61,6 +61,9 @@ type
     size*: byte
     kind*: TypeKind
     id*: int16  ## if not 0 used for type checking.
+  AttrDesc* = object
+    unique*: bool  # has the 'unique' restriction
+    keyPos*: byte  # 0 -- not a key, otherwise N'th position of the lookup key
 
 type
   PageMgr* = object
@@ -362,7 +365,13 @@ type
 ]#
 
 const
-  sizeOverflow = 255
+  sizeOverflow* = 255
+  minStringSize* = 16
+  bestStringSize* = 63 # an educated guess
+  stringAlignment* = 8
+
+proc getAlignment*(t: TypeDesc): int =
+  (if t.kind in {tyString, tyUserVar}: stringAlignment else: int t.size)
 
 proc allocTempString*(p: pointer; size: int): SepValue =
   if size < sizeOverflow:
@@ -411,7 +420,7 @@ declareToSepValue(float64)
 
 proc storeString(p: pointer; size: int; s: pointer; slen: int32;
                  pm: Pager) =
-  assert size >= 16 and size <= (sizeOverflow+1)
+  assert size >= minStringSize and size <= (sizeOverflow+1)
   if slen < size:
     # store as a short string:
     storeByte(p, byte(slen))

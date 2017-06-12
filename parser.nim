@@ -5,21 +5,27 @@ import
 import vm, pager
 
 proc startsWith(n: PNode; s: string): bool =
-  result = n.len >= 1 and n.kind in nkCallKinds and n[0].kind == nkIdent and
+  result = n.safeLen >= 1 and n.kind in nkCallKinds and n[0].kind == nkIdent and
     n[0].ident.s == s
 
 proc error(i: TLineInfo; msg: string) =
   echo i, " Error: ", msg
 
+const
+  skTable = skMethod
+  skIndex = skIterator
+  skAttr = skProc
+
 type
-  SymTab = object
+  SymTab = ref object
     t: TStrTable
+    types: TStrTable
     vars, preds: int
     cache: IdentCache
 
 {.experimental.}
 using
-  c: var SymTab
+  c: SymTab
   n: PNode
 
 proc handleVar(c; n): VarId =
@@ -96,7 +102,7 @@ proc texpr(c; n): QStmt =
   if result == nil:
     result = tree(vm.nkEmpty)
 
-proc tselect*(c; s, w: PNode): QStmt =
+proc tselect(c; s, w: PNode): QStmt =
   result = tree(nkSelect)
   result.add selDecl(c, s)
   var cond = tree(nkAnd)
@@ -109,7 +115,7 @@ proc tselect*(c; s, w: PNode): QStmt =
     cond.add texpr(c, w[1])
   result.add cond
 
-proc tinsert*(c; n): QStmt =
+proc tinsert(c; n): QStmt =
   if n.kind in nkCallKinds and n.len == 3 and n[0].kind == nkIdent:
     # should be a predicate:
     var x = strTableGet(c.t, n[0].ident)
@@ -119,6 +125,68 @@ proc tinsert*(c; n): QStmt =
       result = tree(nkInsert, rel(x.position), texpr(c, n[1]), texpr(c, n[2]))
   else:
     error n.info, "illformed 'insert' command"
+
+proc toIdent(n): string =
+  case n.kind
+  of nkIdent: shallowCopy(result, n.ident.s)
+  of nkStrLit..nkTripleStrLit: shallowCopy(result, n.strVal)
+  else:
+    error n.info, "identifier expected, but found " & $n
+    result = ""
+
+proc ttype(c; n): (TypeDesc, AttrDesc) =
+  assert n.kind == nkStmtList
+  if n.len == 1:
+    var t = n[0]
+    var a: AttrDesc
+    var typ: TypeDesc
+    if t.startsWith"unique_key" and t.len == 2:
+      a.unique = true
+      a.keyPos = 1
+      t = t[1]
+    elif t.startsWith"key" and t.len == 2:
+      a.keyPos = 1
+      t = t[1]
+    if t.startsWith"string" and t.len == 2 and t[1].kind == nkIntLit:
+      typ.kind = pager.tyString
+      var size = t[1].intVal
+      if size < minStringSize: size = minStringSize
+      elif size >= sizeOverflow: size = sizeOverflow-1
+      typ.size = byte(size)
+    elif t.kind == nkIdent:
+      let x = strTableGet(c.types, t.ident)
+      if x == nil: error n.info, "unknown type name: " & $n
+      else:
+        typ.kind = pager.TypeKind(x.position)
+        typ.size = byte x.offset
+    else:
+      error n.info, "invalid type: " & $n
+    result = (typ, a)
+  else:
+    error n.info, "illformed type: " & $n
+
+proc ttable(c; n): QStmt =
+  result = tree(nkTable)
+  if n.len == 3 and n[1].kind == nkIdent and n[2].kind == nkStmtList:
+    # add table name:
+    result.add lit(toIdent(n[1]))
+    let fields = n[2]
+    for f in fields:
+      if f.kind in nkCallKinds and f.len == 2 and f[1].kind == nkStmtList:
+        let attr = tree(nkAttrDef)
+        attr.setAttrProps ttype(c, f[1])
+        attr.add lit(toIdent(f[0]))
+        result.add attr
+      else:
+        error f.info, "': type' expected"
+  else:
+    error n.info, "illformed 'table' command"
+
+proc tindex(c; n): QStmt =
+  if n.len == 3:
+    discard
+  else:
+    error n.info, "illformed 'index' command"
 
 proc parse*(c; s: string; filename = ""; line = 0): QStmt =
   let n = parseString(s, c.cache, filename, line)
@@ -133,6 +201,10 @@ proc parse*(c; s: string; filename = ""; line = 0): QStmt =
       elif it.startsWith"insert" and it.len == 2:
         result.add tinsert(c, it[1])
         # XXX 'insert' needs to allow inserting from a select statement!
+      elif it.startsWith"table":
+        result.add ttable(c, it)
+      elif it.startsWith"index":
+        result.add tindex(c, it)
       elif it.kind in {TNodeKind.nkEmpty, nkCommentStmt}:
         discard
       else:
@@ -142,8 +214,16 @@ proc parse*(c; s: string; filename = ""; line = 0): QStmt =
   else:
     error n.info, "expected a statement"
 
+template declareType(name: string; k: pager.TypeKind; size: int) =
+  let s = newSym(skType, result.cache.getIdent(name), nil, unknownLineInfo())
+  s.position = int(k)
+  s.offset = size
+  strTableAdd(result.types, s)
+
 proc createPredicateMap*(x: varargs[(string, int)]): SymTab =
+  new result
   initStrTable(result.t)
+  initStrTable(result.types)
   result.vars = 0
   result.preds = 0
   result.cache = newIdentCache()
@@ -153,3 +233,40 @@ proc createPredicateMap*(x: varargs[(string, int)]): SymTab =
     attr.position = a[1]
     result.preds = max(result.preds, a[1])
     strTableAdd(result.t, attr)
+  declareType("string", pager.tyString, bestStringSize)
+  declareType("int", pager.tyInt32, 4)
+  declareType("int16", pager.tyInt16, 2)
+  declareType("int32", pager.tyInt32, 4)
+  declareType("int64", pager.tyInt64, 8)
+  declareType("time", pager.tyTime, 8)
+  declareType("float32", pager.tyFloat32, 4)
+  declareType("float64", pager.tyFloat64, 8)
+  declareType("byte", pager.tyByte, 1)
+  declareType("bool", pager.tyBool, 1)
+
+when isMainModule:
+  var m = createPredicateMap()
+  discard parse(m, """
+table person: # no 'key/value' annotations: first entry is the key
+  id: key(int64)  # uniqueKey(int64)
+  name: string(60)
+  salary: int32
+  tax: int32
+
+table attribute:
+  name: unique_key(string(31))
+  btree: int32
+
+
+# every attribute has a type --> BTree from attribute names to type
+# every attribute has a way to access things:
+# attribute name -> (BTree-Index, key|value, offset)
+# table name -> BTree-Index
+
+# We store the type multiple times to save a BTree.
+# This attribute description allows us to update potential indexes
+# automatically.
+
+index person_name(name):
+  id
+""")

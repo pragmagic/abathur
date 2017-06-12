@@ -25,7 +25,9 @@ type
     nkYield,  # also an alias for 'select'
     nkIf,
     nkInsert,
-    nkCreateTable,
+    nkTable,
+    nkAttrDef,
+    nkIndex,
     nkSelect, # a 'select' statement is a pair of (nkYield,nkAnd(cond list))
     nkPred,   # a triple like '?subj pred ?obj'; pred comes first though
     nkLt, nkLe, nkEq, nkNeq, nkGt, nkGe,
@@ -46,6 +48,7 @@ type
       cond: BTreeQuery
     else: kids: seq[QStmt]
     typ: TypeDesc
+    attr: AttrDesc
     compare: Comparator
   Action = proc (results: array[VarId, PinnedValue]; types: array[VarId, TypeDesc])
   Plan = ref object
@@ -56,7 +59,11 @@ type
     vartypes: array[VarId, TypeDesc]
 
   Db* = object
-    relations*: array[50, BTree]
+    schema*: BTree # attribute descriptors; strings -> AttrAddress
+                   # string "" is special and contains in 'btree'
+                   # the number of BTrees and in 'offset' the actual
+                   # page number
+    relations*: seq[BTree]
 
 proc `[]`*(n: Qstmt; i: int): QStmt {.inline.} = n.kids[i]
 proc len*(n: QStmt): int {.inline.} = n.kids.len
@@ -168,6 +175,8 @@ proc exec(db: var DB; p: Plan; it: QStmt) =
     let a = evalVal(p, it[1])
     let b = evalVal(p, it[2])
     db.relations[r].put(a, b)
+  of nkTable:
+    discard
   of nkFor:
     let iter = it[^2]
     let body = it[^1]
@@ -263,6 +272,11 @@ proc lit*(x: string): QStmt =
   result.typ.size = byte 255
 #  result.compare = cmpStrings
 
+proc setAttrProps*(q: QStmt; props: (TypeDesc, AttrDesc)) =
+  # only used for table definitions.
+  q.typ = props[0]
+  q.attr = props[1]
+
 proc nested(s: seq[QStmt]): QStmt =
   result = s[0]
   var current = result
@@ -328,7 +342,7 @@ proc reorder(q: QStmt): QStmt =
 proc annotateTypes(q: QStmt; plan: Plan) =
   case q.kind
   of nkValues, nkKeys, nkPairs, nkCall, nkAsgn, nkProc, nkRelation, nkEmpty,
-     nkPred, nkCreateTable, nkInsert, nkQueryList: discard
+     nkPred, nkTable, nkAttrDef, nkIndex, nkInsert, nkQueryList: discard
   of nkLit:
     assert q.typ.kind != tyNone
     q.compare = typeToCmp(q.typ.kind)
