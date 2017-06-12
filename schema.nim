@@ -1,5 +1,4 @@
-
-# include file
+# included from vm.nim
 
 type
   SymKind* {.pure.} = enum
@@ -20,25 +19,38 @@ type
 
   MetaInfo* = object # overlaid in memory with 'AttrInfo'
     kind*: SymKind
-    pageId*: int64
+    nextPageId*: int64
 
   BiggestInfoType = AttrInfo # currently 'AttrInfo' is the biggest object,
                              # so we use that
-template infoSize(): untyped = sizeof(BiggestInfoType)
+template infoSize(): untyped = sizeof(BiggestInfoType).int32
 
-proc initSchema(db: var Db; pm: Pager) =
-  let y = pinFreshNode(pm)
+
+# We map the schema to a single relation to keep memory usage low.
+# However, this relation is hard to work with and speed critical to
+# access for the query engine and so we also have a completely
+# different representation in memory.
+# The memory specific parts start here:
+type
+  RelationRef* = ref object
+    info*: RelationInfo
+    attrs*: seq[AttrInfo]
+  
+
+proc initSchema*(db: var Db) =
+  let y = pinFreshNode(db.pm)
   let strTy = TypeDesc(kind: tyString, size: 16)
   let valTy = TypeDesc(kind: tyUserFixed, size: infoSize())
-  db.schema = newBTree(y.id, strTy, valTy, cmpStrings, pm)
+  db.schema = newBTree(y.id, strTy, valTy, cmpStrings, db.pm)
   unpin(y)
   db.relations = @[]
 
-proc createRelation(db: var Db; pm: Pager; ri: RelationInfo) =
-  let y = pinFreshNode(pm)
+proc createRelation(db: var Db; ri: RelationInfo) =
+  let y = pinFreshNode(db.pm)
   let valTy = TypeDesc(kind: tyUserFixed, size: ri.valSize)
   setLen(db.relations, ri.idx + 1)
-  db.relations[ri.idx] = newBTree(y.id, ri.keyDesc, valTy, typeToCmp(ri.keyDesc.kind), pm)
+  db.relations[ri.idx] = newBTree(y.id, ri.keyDesc, valTy,
+                                  typeToCmp(ri.keyDesc.kind), db.pm)
   unpin(y)
 
 proc putTableName(db: var Db; name: SepValue; ri: RelationInfo) =
@@ -47,16 +59,16 @@ proc putTableName(db: var Db; name: SepValue; ri: RelationInfo) =
   storeMem(addr(b), unsafeAddr(ri), sizeof(ri))
   db.schema.put(name, SepValue(addr(b)))
 
-proc declareTable(db: var Db; pm: Pager; n: QStmt) =
+proc declareTable(db: var Db; n: QStmt) =
   assert infoSize() >= sizeof(AttrInfo)
   assert infoSize() >= sizeof(RelationInfo)
   assert infoSize() >= sizeof(MetaInfo)
 
   assert n.kind == nkTable
   assert n[0].kind == nkLit
-  var keyOffset = 0
-  var valOffset = 0
-  let btreeIdx = len(db.relations)
+  var keyOffset = 0i32
+  var valOffset = 0i32
+  let btreeIdx = len(db.relations).int32
 
   template incOffset(off) =
     inc off, align - (off mod align)
@@ -69,23 +81,23 @@ proc declareTable(db: var Db; pm: Pager; n: QStmt) =
     assert it.kind == nkAttrDef
     assert it.len == 1
     assert it[0].kind == nkLit
-    let attrName = it[0].lit
+    let attrName = it[0].v
     var aa: AttrInfo
     aa.btree = btreeIdx
-    aa.kind = Attribute
+    aa.kind = SymKind.Attribute
     aa.typ = it.typ
-    aa.ad = it.ad
-    let align = getAlignment(it.typ)
-    if it.ad.keyPos == 0:
+    aa.ad = it.attr
+    let align = getAlignment(aa.typ)
+    if aa.ad.keyPos == 0:
       incOffset(valOffset)
     else:
       incOffset(keyOffset)
       if ri.keyDesc.kind == tyNone: ri.keyDesc = aa.typ
       else: doAssert false, "combined keys are not yet supported"
-    db.schema.put(it[0].lit, SepValue(addr(aa)))
+    db.schema.put(it[0].v, SepValue(addr(aa)))
 
-  ri.kind = Table
+  ri.kind = SymKind.Table
   ri.idx = btreeIdx
-  ri.valSize = int32(valOffset)
-  putTableName(db, n[0].lit, ri)
-  createRelation(db, pm, ri)
+  ri.valSize = valOffset
+  putTableName(db, n[0].v, ri)
+  createRelation(db, ri)

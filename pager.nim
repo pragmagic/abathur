@@ -58,7 +58,7 @@ type
     tyUserVar    ## an unknown type of variable size
                  ## (uses the same trick as 'tyString')
   TypeDesc* = object
-    size*: byte
+    size*: int32
     kind*: TypeKind
     id*: int16  ## if not 0 used for type checking.
   AttrDesc* = object
@@ -115,7 +115,8 @@ proc fillNodeLayout*(n: var NodeLayout; keyDesc, valDesc: TypeDesc) =
                                               valDesc.size.int)
   n.keyDesc = keyDesc
   n.valDesc = valDesc
-  assert n.valsOffset mod valDesc.size.int == 0
+  # XXX Think more about alignment requirements here, do we want 'roundup' here?
+  #assert n.valsOffset mod valDesc.size.int == 0
   assert n.linksOffset mod sizeof(PageId) == 0
   assert n.valsOffset + (n.leafPairs * valDesc.size.int) <= PageSize
   assert n.linksOffset + (n.innerPairs * sizeof(PageId)) <= PageSize
@@ -368,10 +369,10 @@ const
   sizeOverflow* = 255
   minStringSize* = 16
   bestStringSize* = 63 # an educated guess
-  stringAlignment* = 8
+  stringAlignment* = 8i32
 
-proc getAlignment*(t: TypeDesc): int =
-  (if t.kind in {tyString, tyUserVar}: stringAlignment else: int t.size)
+proc getAlignment*(t: TypeDesc): int32 =
+  (if t.kind in {tyString, tyUserVar}: stringAlignment else: t.size)
 
 proc allocTempString*(p: pointer; size: int): SepValue =
   if size < sizeOverflow:

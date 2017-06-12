@@ -88,25 +88,17 @@ when isMainModule:
 
     var db = Db()
     db.relations = @[]
-    db.relations.setLen 2
-    let strTy = TypeDesc(kind: tyString, size: 16)
-    let intTy = TypeDesc(kind: tyInt32, size: 4)
-    let x = pinFreshNode(pm)
-    db.relations[salary] = newBTree(x.id, strTy, intTy, cmpStrings, pm)
-    unpin(x)
-
-    let y = pinFreshNode(pm)
-    db.relations[tax] = newBTree(y.id, strTy, intTy, cmpStrings, pm)
-    unpin(y)
-
+    db.pm = pm
+    initSchema(db)
     const query = """
-insert salary("Angelika", 7000)
-insert salary("Annette", 4000)
-insert salary("Ariane", 3000)
+table person:
+  name: key(string(60))
+  salary: int32
+  tax: int32
 
-insert tax("Annette", 200)
-insert tax("Ariane", 100)
-insert tax("Angelika", 50)
+insert person("Angelika", 7000, 50)
+insert person("Annette", 4000, 200)
+insert person("Ariane", 3000, 100)
 
 select ?rid, ?sid
 where:

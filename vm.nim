@@ -1,5 +1,6 @@
 
 import btree, pager
+from memops import storeMem
 
 const
   MaxVars = 50
@@ -59,6 +60,7 @@ type
     vartypes: array[VarId, TypeDesc]
 
   Db* = object
+    pm*: Pager
     schema*: BTree # attribute descriptors; strings -> AttrAddress
                    # string "" is special and contains in 'btree'
                    # the number of BTrees and in 'offset' the actual
@@ -159,6 +161,8 @@ proc unpinVars(p: Plan) =
     let n = x.n
     if n != nil: unpin(n)
 
+include schema
+
 proc exec(db: var DB; p: Plan; it: QStmt) =
   ## we can also translate a query plan at compile-time to a Nim program.
 
@@ -176,7 +180,7 @@ proc exec(db: var DB; p: Plan; it: QStmt) =
     let b = evalVal(p, it[2])
     db.relations[r].put(a, b)
   of nkTable:
-    discard
+    declareTable(db, it)
   of nkFor:
     let iter = it[^2]
     let body = it[^1]
@@ -263,13 +267,13 @@ proc lit*(x: Value): QStmt =
 proc lit*(x: int64): QStmt =
   result = lit(allocInt32(int32 x))
   result.typ.kind = tyInt32
-  result.typ.size = byte sizeof(int32)
+  result.typ.size = int32 sizeof(int32)
 #  result.compare = cmpInt64
 
 proc lit*(x: string): QStmt =
   result = lit(allocTempString(x))
   result.typ.kind = tyString
-  result.typ.size = byte 255
+  result.typ.size = int32 255
 #  result.compare = cmpStrings
 
 proc setAttrProps*(q: QStmt; props: (TypeDesc, AttrDesc)) =

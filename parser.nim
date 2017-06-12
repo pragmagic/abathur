@@ -116,13 +116,15 @@ proc tselect(c; s, w: PNode): QStmt =
   result.add cond
 
 proc tinsert(c; n): QStmt =
-  if n.kind in nkCallKinds and n.len == 3 and n[0].kind == nkIdent:
+  if n.kind in nkCallKinds and n.len >= 2 and n[0].kind == nkIdent:
     # should be a predicate:
     var x = strTableGet(c.t, n[0].ident)
-    if x == nil or x.kind != skProc:
-      error n.info, "unknown predicate " & n.ident.s
+    if x == nil or x.kind != skTable:
+      error n.info, "unknown table " & n.ident.s
     else:
-      result = tree(nkInsert, rel(x.position), texpr(c, n[1]), texpr(c, n[2]))
+      # XXX support for named arguments here
+      result = tree(nkInsert, rel(x.position))
+      for i in 1..<n.len: result.add texpr(c, n[i]))
   else:
     error n.info, "illformed 'insert' command"
 
@@ -152,13 +154,13 @@ proc ttype(c; n): (TypeDesc, AttrDesc) =
       var size = t[1].intVal
       if size < minStringSize: size = minStringSize
       elif size >= sizeOverflow: size = sizeOverflow-1
-      typ.size = byte(size)
+      typ.size = size.int32
     elif t.kind == nkIdent:
       let x = strTableGet(c.types, t.ident)
       if x == nil: error n.info, "unknown type name: " & $n
       else:
         typ.kind = pager.TypeKind(x.position)
-        typ.size = byte x.offset
+        typ.size = x.offset.int32
     else:
       error n.info, "invalid type: " & $n
     result = (typ, a)
