@@ -1,13 +1,5 @@
 
 
-type
-  KV = object
-    k, v: int
-  F = object
-    arrays: array[32, seq[KV]]
-
-#proc insert(x: var F; k: KV) =
-
 import random
 
 proc randomStr(L: int): string =
@@ -22,15 +14,20 @@ proc randomStr(L: int): string =
 # >X .. Y  and C..<D overlap iff (D > X and C <= Y)
 
 type
-  Key = int
+  SepValue = int
+  Node = openArray[SepValue]
+  NodeLayout = object
+  BTree = object
+    layout: NodeLayout
+    pager: pointer
 
 include follow
 
-proc follow(wanted: Interval; keys: openArray[Key]): (int, int) =
-  result = follow(wanted, keys, keys.high)
+proc follow(wanted: Interval; keys: openArray[SepValue]): (int, int) =
+  result = follow(wanted, keys, BTree(), keys.high)
 
-proc matches(wanted: Interval; keys: openArray[Key]): (int, int) =
-  result = matches(wanted, keys, keys.high)
+proc matches(wanted: Interval; keys: openArray[SepValue]): (int, int) =
+  result = matches(wanted, keys, BTree(), keys.high)
 
 proc isEmpty(t: (int, int)): bool = t[0] > t[1]
 

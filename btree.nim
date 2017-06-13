@@ -1,39 +1,11 @@
-## BTree implementation for Karax DB. Can also be used as a persistent
+## BTree implementation for Abathur. Can also be used as a persistent
 ## data structure. The persistent operations use a 'Ps' suffix.
 ## Can also use a page manager for allocations. The page manager can be used
 ## to off load pages to a file system or to send it over the wire.
-
-## Todo:
-## - Add logic to deal with the fact that keys do not have to be unique.
-
-## Keys can be made unique by adding a 'count' part. This solution is easier
-## to implement than lists of values. --> But this means every key is 4
-## bytes larger than necessary. :-( It's better to keep keys small and
-## instead make values larger.
-## What is the problem though with multiple keys? The iterator can already
-## follow potentially many branches to support range queries.
-## Insertions work reasonably well with the existing algorithm. The major
-## problem is that the key in the inner node is not discriminant anymore.
-## We need to be able to mark such keys as "ambiguous" (both to the left
-## and to the right keys of this value may occur). This is only a problem
-## for an exact match of key==search_value. We could always make these
-## matches ambiguous. This also implies to modify every binary search
-## to deal with multiple keys of the same value. It has the advantage
-## that no additional storage is required at all. -- Yeah, let's do
-## that!
-
-## Another possibility
-## to detect ambiguous keys is to check the next key. If identical,
-## it is not a discriminant key. This is slower though.
+## Keys do NOT have to be unique so it can be used out of the box as an index.
 
 from strutils import startsWith
 import memops, pager
-
-## Due to the fact that leaves are shared among multiple BTrees the following
-## fields in a Node are downright impossible:
-## - parent
-## - next
-## - prev
 
 type
   BTree* = object
@@ -52,21 +24,11 @@ proc newBTree*(root: PageId; keyDesc, valDesc: TypeDesc;
   result.layout.cmp = cmp
   result.pager = pager
 
-type
-  IntervalOption = enum
-    minIsInf, maxIsInf,
-    minExcluded, # <a
-    maxExcluded, # <b
-    maxIsMin # search for a single key
-  Interval = object
-    a, b: SepValue
-    options: set[IntervalOption]
-
 template cmp(x, y: pointer): untyped =
   b.layout.cmp(x, y, b.pager)
 
-template cmp(x: SepValue, y: pointer): untyped =
-  b.layout.cmp(pointer x, y, b.pager)
+template cmp(x: pointer, y: SepValue): untyped =
+  b.layout.cmp(x, pointer y, b.pager)
 
 template cmp(x, y: SepValue): untyped =
   b.layout.cmp(pointer x, pointer y, b.pager)
@@ -74,112 +36,9 @@ template cmp(x, y: SepValue): untyped =
 template myhigh(n: Node): int = MaxKeys+1
 #  if n.isInternal: n.layout.innerPairs else: n.layout.leafPairs
 
-proc searchMin(key: SepValue, n: Node; start: int; exclusive: bool;
-               b: BTree): int =
-  ## we search the maximal v in a such that 'key <? v' (key is still
-  ## less than or equal to 'v'). If exclusive  <?  is '<'
-  var ri = n.m.int
-  var le = start
-  while le < ri:
-    var mid = (le + ri) div 2
-    # leftmost keys are smaller than anything, rightmost are bigger than
-    # anything:
-    let c = if mid < start: -1
-            elif mid >= n.m: 1
-            else: cmp(key, keyAt(n, mid, b.layout))
-    if c > 0: le = mid + 1
-    elif c == 0:
-      # exact match?  < a[mid]
-      assert mid > 0
-      # if the keys are identical and we require 'lt', we know
-      # only the left branch is required:
-      return mid-ord(exclusive)
-    else: ri = mid
-  result = le-1
+template `[]`(n: Node; x: int): pointer = keyAt(n, x, b.layout)
 
-proc searchMax(key: SepValue; n: Node; start: int; exclusive: bool;
-               b: BTree): int =
-  var ri = n.m.int
-  var le = start
-  while le < ri:
-    var mid = (le + ri) div 2
-    # leftmost keys are smaller than anything, rightmost are bigger than
-    # anything:
-    let c = if mid < start: -1
-            elif mid >= n.m: 1
-            else: cmp(key, keyAt(n, mid, b.layout))
-    if c < 0: ri = mid
-    elif c == 0:
-      # exact match?  < a[mid]
-      assert mid > 0
-      # if the keys are identical and we require 'ge', we know
-      # only the left branch is required:
-      return min(mid, n.m-1)-ord(exclusive)
-    else: le = mid + 1
-  result = min(ri-1, n.m-1)
-
-proc follow(wanted: Interval; keys: Node; b: BTree): (int, int) =
-  if minIsInf notin wanted.options:
-    result[0] = searchMin(wanted.a, keys, 1, minExcluded in wanted.options, b)
-  else:
-    result[0] = 0
-  if maxIsMin in wanted.options:
-    result[1] = result[0]
-  elif maxisInf notin wanted.options:
-    result[1] = searchMax(wanted.b, keys, result[0]+1,
-                          maxExcluded in wanted.options, b)
-  else:
-    result[1] = keys.myhigh
-
-proc binaryFind(v: Node, key: SepValue; b: BTree): int =
-  var
-    le = 0
-    ri = v.m.int-1
-  while le <= ri:
-    let probe = (le + ri) div 2
-    let c = cmp(key, keyAt(v, probe, b.layout))
-    if c > 0:
-      le = probe + 1
-    elif c < 0:
-      ri = probe - 1
-    else:
-      return probe
-  result = -(le + 1)
-
-proc matches(wanted: Interval; keys: Node; b: BTree): (int, int) =
-  assert cmp(wanted.a, wanted.b) != 0 or maxIsMin in wanted.options
-  if maxIsMin in wanted.options:
-    let x = binaryFind(keys, wanted.a, b)
-    if x < 0: return (abs(x), -1)
-    return (x, x)
-
-  if minIsInf notin wanted.options:
-    result[0] = max(binaryFind(keys, wanted.a, b), 0)
-    # could still be a non-match though:
-    if minExcluded in wanted.options:
-      let c = cmp(wanted.a, keyAt(keys, result[0], b.layout))
-      if c > 0: result[0] = keys.m
-      elif c == 0: inc result[0]
-    else:
-      if cmp(wanted.a, keyAt(keys, result[0], b.layout)) > 0: result[0] = high(int)
-    #searchMin(wanted.a, keys, 0, minExcluded in wanted.options)
-  else:
-    result[0] = 0
-  if maxisInf notin wanted.options:
-    result[1] = binaryFind(keys, wanted.b, b)
-    if result[1] >= 0:
-      if maxExcluded in wanted.options:
-        let c = cmp(wanted.b, keyAt(keys, result[1], b.layout))
-        if c < 0: result[1] = -2
-        elif c == 0: dec result[1]
-      else:
-        if cmp(wanted.b, keyAt(keys, result[1], b.layout)) < 0: result[1] = -2
-    else:
-      result[1] = abs(result[1])-2
-    #result[1] = searchMax(wanted.b, keys, result[0],
-    #                      maxExcluded in wanted.options)
-  else:
-    result[1] = keys.myhigh
+include follow
 
 const
   wordShift = 5
@@ -205,12 +64,20 @@ type
       arg1, arg2: BTreeQuery
 
   Mask = array[(MaxKeys shr wordShift) + 1, uint32]
-  QCursor* = object
+
+  CursorBase* {.pure, inheritable.} = object
     state: CursorState
     stack: seq[PageId]
-    m: Mask
     i: int
     n: Node
+
+  QCursor* = object of CursorBase
+    m: Mask
+
+  TCursor* = object of CursorBase ## simply yields every (key, value)-pair
+
+  RCursor* = object of CursorBase ## range cursor
+    ra, rb: SepValue  # the range to search for
 
 proc setBit(m: var Mask; i: int) {.inline.} =
   m[i shr wordShift] = m[i shr wordShift] or (1u32 shl (uint32(i) and wordMask))
@@ -218,31 +85,39 @@ proc setBit(m: var Mask; i: int) {.inline.} =
 proc testBit(m: Mask; i: int): bool {.inline.} =
   (m[i shr wordShift] and (1u32 shl (uint32(i) and wordMask))) != 0u32
 
-proc initQCursor*(x: PageId): QCursor =
+template commonCursorInit(x) =
   result.stack = @[x]
   result.i = 0
   result.n = nil
   result.state = stPop
 
+proc initQCursor*(x: PageId): QCursor =
+  commonCursorInit(x)
+
 proc initQCursor*(t: BTree): QCursor = initQCursor(t.root)
 
-proc atEnd*(c: QCursor): bool = c.state == stEnd
+proc initRCursor*(t: BTree; ra, rb: SepValue): RCursor =
+  commonCursorInit(t.root)
 
-proc getKey*(c: QCursor; b: BTree): pointer =
+proc initTCursor*(t: BTree): TCursor = commonCursorInit(t.root)
+
+proc atEnd*(c: CursorBase): bool = c.state == stEnd
+
+proc getKey*(c: CursorBase; b: BTree): pointer =
   assert c.state == stLeaf
   result = keyAt(c.n, c.i, b.layout)
 
-proc getPinnedKey*(c: QCursor; b: BTree): PinnedValue =
+proc getPinnedKey*(c: CursorBase; b: BTree): PinnedValue =
   assert c.state == stLeaf
   result.p = keyAt(c.n, c.i, b.layout)
   result.n = c.n
   pin(c.n)
 
-proc getVal*(c: QCursor; b: BTree): pointer =
+proc getVal*(c: CursorBase; b: BTree): pointer =
   assert c.state == stLeaf
   result = valAt(c.n, c.i, b.layout)
 
-proc getPinnedVal*(c: QCursor; b: BTree): PinnedValue =
+proc getPinnedVal*(c: CursorBase; b: BTree): PinnedValue =
   assert c.state == stLeaf
   result.p = valAt(c.n, c.i, b.layout)
   result.n = c.n
@@ -263,7 +138,7 @@ proc evalAtom(n: Node; q: BTreeQuery; m: var Mask; b: BTree) =
   of opTrue:
     for i in 0..<n.m: setBit(m, i)
   of opCmp:
-    let (a, b) = matches(q.i, n, b)
+    let (a, b) = matches(q.i, n, b, n.m-1)
     for i in a..b: setBit(m, i)
   of opStartsWith:
     # XXX Implement me
@@ -273,7 +148,8 @@ proc evalAtom(n: Node; q: BTreeQuery; m: var Mask; b: BTree) =
     discard
   of opIn:
     for against in elements(q):
-      let (a, b) = matches(Interval(a: SepValue(against), options: {maxIsMin}), n, b)
+      let (a, b) = matches(Interval(a: SepValue(against),
+                           options: {maxIsMin}), n, b, n.m-1)
       if a <= b: setBit(m, a)
   of opNot:
     evalAtom(n, q.arg0, m, b)
@@ -292,13 +168,14 @@ proc evalInner(n: Node; q: BTreeQuery; m: var Mask; b: BTree) =
   assert n.isInternal
   case q.op
   of opCmp, opStartsWith:
-    let (a, b) = follow(q.i, n, b)
+    let (a, b) = follow(q.i, n, b, n.m-1)
     for i in a..b: setBit(m, i)
   of opIn:
     var card = 0
     for against in elements(q):
       # 'in' is based on equality:
-      let (a, bb) = follow(Interval(a: SepValue(against), options: {maxIsMin}), n, b)
+      let (a, bb) = follow(Interval(a: SepValue(against),
+                           options: {maxIsMin}), n, b, n.m-1)
       if a <= bb and not testBit(m, a):
         setBit(m, a)
         inc card
@@ -322,35 +199,60 @@ proc evalInner(n: Node; q: BTreeQuery; m: var Mask; b: BTree) =
     evalInner(n, q.arg1, m, b)
     evalInner(n, q.arg2, m, b)
 
-proc next(c: var QCursor; b: BTree; q: BTreeQuery) =
+template nextImpl() {.dirty.} =
   while true:
     case c.state
     of stEnd: return
     of stLeaf:
       let x = c.n
-      for j in c.i+1 ..< x.m:
-        if testBit(c.m, j):
-          # state stays stLeaf
-          c.i = j
-          return
+      leafAction()
       c.state = stPop
     of stPop:
       if c.stack.len == 0:
         c.state = stEnd
         return
       let x = pinNode(b.pager, c.stack.pop())
-      zMem(addr(c.m), sizeof(c.m))
+      zeroAction()
       if not x.isInternal:
         c.i = -1
         c.n = x
         c.state = stLeaf
-        evalAtom(x, q, c.m, b)
+        evalAtom()
       else:
-        evalInner(x, q, c.m, b)
+        evalInner()
         for i in countdown(x.m-1, 0):
-          if testBit(c.m, i): c.stack.add(pageIdAt(x, i, b.layout))
+          testInner:
+            c.stack.add(pageIdAt(x, i, b.layout))
         # state stays stPop, but go on.
       unpin(x)
+
+proc next(c: var QCursor; b: BTree; q: BTreeQuery) =
+  template leafAction() =
+    for j in c.i+1 ..< x.m:
+      if testBit(c.m, j):
+        # state stays stLeaf
+        c.i = j
+        return
+
+  template zeroAction() = zMem(addr(c.m), sizeof(c.m))
+  template evalAtom() = evalAtom(x, q, c.m, b)
+  template evalInner() = evalInner(x, q, c.m, b)
+
+  template testInner(body) =
+    if testBit(c.m, i): body
+
+  nextImpl()
+
+proc next*(c: var TCursor; b: BTree) =
+  template leafAction() =
+    if c.i+1 < x.m:
+      inc c.i
+      return
+  template zeroAction() = discard
+  template evalAtom() = discard
+  template evalInner() = discard
+  template testInner(body) = body
+  nextImpl()
 
 #proc get(t: BTree; key: Key): Val = search(t.root, key, t.height)
 
@@ -392,8 +294,9 @@ proc insert(p: PageId, key, val: SepValue; b: BTree): PageId =
   var j = 0
   var M = 0
   if not h.isInternal:
+    # XXX Replace by a binary search here!
     while j < h.m:
-      if cmp(key, keyAt(h, j, b.layout)) < 0: break
+      if cmp(keyAt(h, j, b.layout), key) > 0: break
       inc j
     for i in countdown(h.m.int, j+1):
       storeMem(valAt(h, i, b.layout), valAt(h, i-1, b.layout), b.layout.valDesc.size.int)
@@ -402,7 +305,7 @@ proc insert(p: PageId, key, val: SepValue; b: BTree): PageId =
     M = b.layout.leafPairs
   else:
     while j < h.m:
-      if j+1 == h.m or cmp(key, keyAt(h, j+1, b.layout)) < 0:
+      if j+1 == h.m or cmp(keyAt(h, j+1, b.layout), key) > 0:
         let u = insert(pageIdAt(h, j, b.layout), key, val, b)
         inc j
         if u == 0:

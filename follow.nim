@@ -9,7 +9,7 @@ type
     maxExcluded, # <b
     maxIsMin # search for a single key
   Interval = object
-    a, b: Key
+    a, b: SepValue
     options: set[IntervalOption]
 #[
 binLowerBound(a, lo, hi, x)
@@ -31,7 +31,7 @@ binHigherBound(a, lo, hi, x)
   return lo
 ]#
 
-proc rawSearchMin(key: Key; a: openArray[Key]; start, last: int): int =
+proc rawSearchMin(key: SepValue; a: Node; b: BTree; start, last: int): int =
   ## we search the maximal v in a such that 'key <? v' (key is still
   ## less than or equal to 'v'). If exclusive  <?  is '<'
   ## This algorithm with different boundary cases is what 'insert' needs to use!
@@ -46,8 +46,9 @@ proc rawSearchMin(key: Key; a: openArray[Key]; start, last: int): int =
       le = mid + 1
   result = le
 
-proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
-  result = rawSearchMin(key, a, start, last)
+proc searchMin(key: SepValue; a: Node; b: BTree; start, last: int;
+               exclusive: bool): int =
+  result = rawSearchMin(key, a, b, start, last)
   # boundary cases:
   if result > last: result = last
   elif result > 0 and cmp(a[result], key) != 0: dec result
@@ -56,7 +57,7 @@ proc searchMin(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
     # only the left branch is required:
     dec result
 
-proc searchMaxHelper(key: Key; a: openArray[Key]; start, last: int): int =
+proc searchMaxHelper(key: SepValue; a: Node; b: BTree; start, last: int): int =
   # we want to find the last index 'i' where a[i] is still 'key'
   var ri = last
   var le = start
@@ -71,7 +72,7 @@ proc searchMaxHelper(key: Key; a: openArray[Key]; start, last: int): int =
     else:
       ri = mid - 1
 
-proc searchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
+proc searchMax(key: SepValue; a: Node; b: BTree; start, last: int; exclusive: bool): int =
   var ri = last
   var le = start
   while le <= ri:
@@ -87,7 +88,7 @@ proc searchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
     result = last
   else:
     # we need the last entry that could possibly be meant:
-    result = searchMaxHelper(a[result], a, result, last)
+    result = searchMaxHelper(SepValue a[result], a, b, result, last)
   #elif result > 0 and cmp(a[result], key) == 0:
     # if the keys are identical and we require 'ge', we know
     # only the left branch is required:
@@ -98,16 +99,16 @@ proc searchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): 
   #  dec result
   #echo "res ", result, "  ", start, "..", last
 
-proc follow(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
+proc follow(wanted: Interval; keys: Node; b: BTree; last: int): (int, int) =
   if minIsInf notin wanted.options:
-    result[0] = searchMin(wanted.a, keys, 1, last, minExcluded in wanted.options)
+    result[0] = searchMin(wanted.a, keys, b, 1, last, minExcluded in wanted.options)
   else:
     result[0] = 0
   # due to possible duplicate keys, we cannot shortcut this search for max:
   #if maxIsMin in wanted.options:
   #  result[1] = result[0]
   if maxisInf notin wanted.options:
-    result[1] = searchMax(wanted.b, keys, result[0], last,
+    result[1] = searchMax(wanted.b, keys, b, result[0], last,
                           maxExcluded in wanted.options)
     # it can be that keys[result[b]] > max and then we decrement it by one:
     if maxIsMin in wanted.options:
@@ -115,13 +116,13 @@ proc follow(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
   else:
     result[1] = last
 
-proc binaryFind(v: openarray[Key], key: Key; last: int): int =
-  result = rawSearchMin(key, v, 0, last)
-  if result < 0 or result > last or cmp(v[result], key) != 0:
+proc binaryFind(key: SepValue; keys: Node; b: BTree; last: int): int =
+  result = rawSearchMin(key, keys, b, 0, last)
+  if result < 0 or result > last or cmp(keys[result], key) != 0:
     # not found:
     result = -1
 
-proc matchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): int =
+proc matchMax(key: SepValue; a: Node; b: BTree; start, last: int; exclusive: bool): int =
   assert start >= 0
   var ri = last
   var le = start
@@ -138,20 +139,20 @@ proc matchMax(key: Key; a: openArray[Key]; start, last: int; exclusive: bool): i
     result = last
   else:
     # we need the last entry that could possibly be meant:
-    result = searchMaxHelper(a[result], a, result, last)
+    result = searchMaxHelper(SepValue a[result], a, b, result, last)
   if exclusive:
     while result > start and cmp(a[result], key) == 0: dec result
   while result >= start and cmp(a[result], key) > 0: dec result
 
-proc matches(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
+proc matches(wanted: Interval; keys: Node; b: BTree; last: int): (int, int) =
   assert cmp(wanted.a, wanted.b) != 0 or maxIsMin in wanted.options
   if maxIsMin in wanted.options:
-    let x = binaryFind(keys, wanted.a, last)
+    let x = binaryFind(wanted.a, keys, b, last)
     if x < 0: return (abs(x), -1)
-    return (x, searchMaxHelper(keys[x], keys, x, last))
+    return (x, searchMaxHelper(SepValue keys[x], keys, b, x, last))
 
   if minIsInf notin wanted.options:
-    result[0] = max(binaryFind(keys, wanted.a, last), 0)
+    result[0] = max(binaryFind(wanted.a, keys, b, last), 0)
     # could still be a non-match though:
     if minExcluded in wanted.options:
       let c = cmp(keys[result[0]], wanted.a)
@@ -163,11 +164,11 @@ proc matches(wanted: Interval; keys: openArray[Key]; last: int): (int, int) =
   else:
     result[0] = 0
   if maxisInf notin wanted.options:
-    result[1] = matchMax(wanted.b, keys, result[0], last,
-                                    maxExcluded in wanted.options) #binaryFind(keys, wanted.b, last)
+    result[1] = matchMax(wanted.b, keys, b, result[0], last,
+                         maxExcluded in wanted.options) #binaryFind(keys, wanted.b, last)
     when false:
       if result[1] >= 0:
-        result[1] = searchMaxHelper(keys[result[1]], keys, result[1], last)
+        result[1] = searchMaxHelper(keys[result[1]], keys, b, result[1], last)
         if maxExcluded in wanted.options:
           let c = cmp(wanted.b, keys[result[1]])
           if c < 0: result[1] = -2

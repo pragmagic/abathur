@@ -10,6 +10,7 @@ type
     offset*: int32  # offset into key or value space to retrieve this attribute
     typ*: TypeDesc
     ad*: AttrDesc
+    pos*: int32
 
   RelationInfo* = object # overlaid in memory with 'AttrInfo'
     kind*: SymKind
@@ -35,7 +36,20 @@ type
   RelationRef* = ref object
     info*: RelationInfo
     attrs*: seq[AttrInfo]
-  
+
+proc getTable*(db: var Db; name: string): RelationInfo =
+  discard
+
+proc getAttr*(db: var Db; pos: int32; ri: RelationInfo): AttrInfo =
+  var cur = initTCursor(db.schema)
+  while true:
+    next(cur, db.schema)
+    if atEnd(cur): break
+    let ai = cast[ptr AttrInfo](getVal(cur, db.schema))
+    if ai.kind == SymKind.Attribute and ai.pos == pos and
+        ai.btree == ri.idx:
+      result = ai[]
+      break
 
 proc initSchema*(db: var Db) =
   let y = pinFreshNode(db.pm)
@@ -87,6 +101,7 @@ proc declareTable(db: var Db; n: QStmt) =
     aa.kind = SymKind.Attribute
     aa.typ = it.typ
     aa.ad = it.attr
+    aa.pos = i.int32
     let align = getAlignment(aa.typ)
     if aa.ad.keyPos == 0:
       incOffset(valOffset)
