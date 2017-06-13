@@ -77,7 +77,7 @@ type
   TCursor* = object of CursorBase ## simply yields every (key, value)-pair
 
   RCursor* = object of CursorBase ## range cursor
-    ra, rb: SepValue  # the range to search for
+    ra, rb: int  # the range to iterate over
 
 proc setBit(m: var Mask; i: int) {.inline.} =
   m[i shr wordShift] = m[i shr wordShift] or (1u32 shl (uint32(i) and wordMask))
@@ -96,7 +96,7 @@ proc initQCursor*(x: PageId): QCursor =
 
 proc initQCursor*(t: BTree): QCursor = initQCursor(t.root)
 
-proc initRCursor*(t: BTree; ra, rb: SepValue): RCursor =
+proc initRCursor*(t: BTree): RCursor =
   commonCursorInit(t.root)
 
 proc initTCursor*(t: BTree): TCursor = commonCursorInit(t.root)
@@ -240,6 +240,24 @@ proc next(c: var QCursor; b: BTree; q: BTreeQuery) =
 
   template testInner(body) =
     if testBit(c.m, i): body
+
+  nextImpl()
+
+proc next(c: var RCursor; b: BTree; q: Interval) =
+  template leafAction() =
+    for j in c.i+1 ..< x.m:
+      if j >= c.ra and j <= c.rb:
+        c.i = j
+        return
+
+  template zeroAction() = discard
+  template evalAtom() =
+    (c.ra, c.rb) = matches(q, x, b, x.m-1)
+  template evalInner() =
+    (c.ra, c.rb) = follow(q, x, b, x.m-1)
+
+  template testInner(body) =
+    if i >= c.ra and i <= c.rb: body
 
   nextImpl()
 
@@ -494,8 +512,21 @@ when isMainModule:
     for i in 1i32..50000i32:
       let k = $i & "adflongerthan16charsherepleasebugtriggering"
       t.put(k, $(50i32 - i))
-    echo t
+    #echo t
     echo t.height, " ", t.n
+    var cur = initRCursor(t)
+    withTempString("400", a1):
+      withTempString("500", a2):
+        while true:
+          next(cur, t, Interval(a: a1, b: a2, options: {}))
+          if atEnd(cur): break
+          let key = getKey(cur, t)
+          let val = getVal(cur, t)
+          var x = ""
+          x.addEntry(key, t.layout.keyDesc, t.pager)
+          x.add " -> "
+          x.addEntry(val, t.layout.valDesc, t.pager)
+          echo x
 
   proc testDuplicateKeys =
     let desc = TypeDesc(kind: tyString, size: 16)
@@ -617,4 +648,4 @@ when isMainModule:
         if i > 30: break
         inc i
 
-  testDuplicateKeys()
+  main3()

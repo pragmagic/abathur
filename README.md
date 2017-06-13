@@ -11,5 +11,4 @@ A genetically modified database
 - implement string handling routines
 - perform integer conversions
 - check primary keys are declared correctly
-- refactor the BTree to use the new follow set algorithms
 - optimize the case: key is "N, N+1, N+2, N+3, ..."
