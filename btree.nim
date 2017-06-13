@@ -288,32 +288,55 @@ proc split(h: Node; b: BTree): PageId =
   result = res.id
   unpin res
 
+proc searchUpper(key: SepValue; a: Node; b: BTree; start, last: int): int =
+  result = start
+  var count = last - start + 1
+  var step, pos: int
+  while count != 0:
+    step = count div 2
+    pos = result + step
+    assert pos >= start and pos <= last
+    # <= so that duplicate keys are appended at the end. This means much
+    # faster insertions for duplicate keys and is also what the developer
+    # expects!
+    if cmp(a[pos], key) <= 0:
+      result = pos + 1
+      count -= step + 1
+    else:
+      count = step
+
 proc insert(p: PageId, key, val: SepValue; b: BTree): PageId =
   let h = pinNode(b.pager, p)
   var newLink: PageId = 0
   var j = 0
   var M = 0
   if not h.isInternal:
-    # XXX Replace by a binary search here!
-    while j < h.m:
-      if cmp(keyAt(h, j, b.layout), key) > 0: break
-      inc j
+    j = searchUpper(key, h, b, 0, h.m-1)
+    when defined(saneInsert):
+      var jj = 0
+      while jj < h.m:
+        if cmp(keyAt(h, jj, b.layout), key) > 0: break
+        inc jj
+      assert j == jj
     for i in countdown(h.m.int, j+1):
       storeMem(valAt(h, i, b.layout), valAt(h, i-1, b.layout), b.layout.valDesc.size.int)
       # shallowCopy(h.vals[i], h.vals[i-1])
     storeEntry(valAt(h, j, b.layout), b.layout.valDesc, val, b.pager)
     M = b.layout.leafPairs
   else:
-    while j < h.m:
-      if j+1 == h.m or cmp(keyAt(h, j+1, b.layout), key) > 0:
-        let u = insert(pageIdAt(h, j, b.layout), key, val, b)
-        inc j
-        if u == 0:
-          unpin(h)
-          return 0
-        newLink = u
-        break
-      inc j
+    j = searchUpper(key, h, b, 1, h.m-1)-1
+    when defined(saneInsert):
+      var jj = 0
+      while jj < h.m:
+        if jj+1 == h.m or cmp(keyAt(h, jj+1, b.layout), key) > 0: break
+        inc jj
+      assert j == jj
+    let u = insert(pageIdAt(h, j, b.layout), key, val, b)
+    inc j
+    if u == 0:
+      unpin(h)
+      return 0
+    newLink = u
     for i in countdown(h.m.int, j+1):
       storeMem(linkAt(h, i, b.layout), linkAt(h, i-1, b.layout), sizeof(PageId))
     storeLink(h, j, b.layout, newLink)
@@ -474,6 +497,16 @@ when isMainModule:
     echo t
     echo t.height, " ", t.n
 
+  proc testDuplicateKeys =
+    let desc = TypeDesc(kind: tyString, size: 16)
+    let x = pinFreshNode(addr mgr)
+    var t = newBTree(x.id, desc, desc, cmpStrings, addr mgr)
+    unpin(x)
+    for i in 1i32..50000i32:
+      let k = "adflongerthan16charsherepleasebugtriggering"
+      t.put(k, $i)
+    echo t
+
   proc main =
     when false:
       var st = newBTree()
@@ -584,4 +617,4 @@ when isMainModule:
         if i > 30: break
         inc i
 
-  main3()
+  testDuplicateKeys()
