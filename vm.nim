@@ -7,7 +7,6 @@ const
 type
   VarId* = range[0..MaxVars-1]
 
-  Value = SepValue
   QStmtKind* = enum
     nkEmpty,
     nkQueryList, # a list of queries
@@ -42,11 +41,11 @@ type
     case kind*: QStmtKind
     of nkEmpty: discard
     of nkLit, nkName:
-      v: Value
+      v: SepValue
     of nkRelation:
       rid: int
       attrInfo: seq[AttrInfo]
-    of nkProc: fn: proc (x: openArray[Value]): Value {.nimcall.}
+    of nkProc: fn: proc (x: openArray[SepValue]): SepValue {.nimcall.}
     of nkVarDef, nkVarUse:
       varId: VarId
     of nkValues, nkKeys, nkPairs:
@@ -100,12 +99,12 @@ proc `$`*(n: QStmt): string =
   toString(n, "\n", result)
 
 # we have a stmt/expr split here:
-proc evalVal(p: Plan; it: QStmt): Value =
+proc evalVal(p: Plan; it: QStmt): SepValue =
   case it.kind
   of nkLit: result = it.v
-  of nkVarUse: result = Value(p.bindings[it.varId].p)
+  of nkVarUse: result = SepValue(p.bindings[it.varId].p)
   of nkCall:
-    var args = newSeq[Value](it.len-1)
+    var args = newSeq[SepValue](it.len-1)
     assert it[0].kind == nkProc
     for i in 0..it.len-2:
       args[i] = evalVal(p, it[i+1])
@@ -176,9 +175,9 @@ proc exec(db: var DB; p: Plan; it: QStmt) =
     let val = allocMem(pointer, valSize)
     for i in 2 ..< it.len:
       let b = evalVal(p, it[i])
-      let offset = rel.attrInfo[i].offset
+      let offset = rel.attrInfo[i-1].offset
       # XXX implement string sharing in storeEntry
-      storeEntry(val +! offset, rel.attrInfo[i].typ, b, db.pm)
+      storeEntry(val +! offset, rel.attrInfo[i-1].typ, b, db.pm)
     db.relations[r].put(key, SepValue val)
     deallocMem(val)
   of nkTable: discard
@@ -261,13 +260,13 @@ proc `?!`(x: VarId): QStmt =
   result = atom(nkVarDef)
   result.varId = x
 
-proc lit*(x: Value): QStmt =
+proc lit*(x: SepValue): QStmt =
   result = atom(nkLit)
   result.v = x
 
-proc name*(x: Value): QStmt =
+proc name*(x: string): QStmt =
   result = atom(nkName)
-  result.v = x
+  result.v = allocTempString(x)
 
 proc lit*(x: int64): QStmt =
   result = lit(allocInt32(int32 x))
@@ -447,7 +446,7 @@ proc declareTable(db: var Db; n: QStmt) =
   assert infoSize() >= sizeof(MetaInfo)
 
   assert n.kind == nkTable
-  assert n[0].kind == nkLit
+  assert n[0].kind == nkName
   var keyOffset = 0i32
   var valOffset = 0i32
   let btreeIdx = len(db.relations).int32
@@ -458,18 +457,18 @@ proc declareTable(db: var Db; n: QStmt) =
     inc off, aa.typ.size
 
   var ri: RelationInfo
-  for i in 0..<n.len:
+  for i in 1..<n.len:
     let it = n[i]
     assert it.kind == nkAttrDef
     assert it.len == 1
-    assert it[0].kind == nkLit
+    assert it[0].kind == nkName
     let attrName = it[0].v
     var aa: AttrInfo
     aa.btree = btreeIdx
     aa.kind = SymKind.Attribute
     aa.typ = it.typ
     aa.ad = it.attr
-    aa.pos = i.int32
+    aa.pos = (i-1).int32
     let align = getAlignment(aa.typ)
     if aa.ad.keyPos == 0:
       incOffset(valOffset)
@@ -499,26 +498,24 @@ proc tqueries(n: Query; db: var Db; p: Plan): QStmt =
     assert n[0].kind == nkName
     let tab = getTable(db, n[0].v)
     if tab.isEmpty:
-      withTempString(n[0].v, tname):
-        quit "unknown table " & tname
+      quit "unknown table " & toString(n[0].v, db.pm)
     var relation = rel(tab.idx)
     relation.attrInfo = newSeq[AttrInfo](n.len-1)
     n.kids[0] = relation
     for i in 1 ..< n.len:
+      let it = n[i]
       let (attrName, attr) = getAttr(db, i.int32-1, tab)
       if attr.isEmpty:
         quit "no attribute for position " & $i
-      relation.attrInfo[i] = attr
+      relation.attrInfo[i-1] = attr
       if i == 1 and attr.ad.keyPos != 1:
-        withTempString(attrName, aname):
-          quit "key attribute expected, but found " & aname
-      annotateTypes(it[i], p)
-      checkSameType(attr.typ, it[i].typ)
+        quit "key attribute expected, but found " & toString(attrName, db.pm)
+      annotateTypes(it, p)
+      checkSameType(attr.typ, it.typ)
     # check that every attribute is covered:
     let (attrName, attr) = getAttr(db, n.len.int32, tab)
     if not attr.isEmpty:
-      withTempString(attrName, aname):
-        quit "no value given for attribute " & aname
+      quit "no value given for attribute " & toString(attrName, db.pm)
     # XXX insert additional inserts here to keep indexes up to date.
     # XXX insert required type conversions here.
   else: discard

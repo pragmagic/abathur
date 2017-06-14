@@ -497,6 +497,10 @@ proc addEntry*(s: var string; p: pointer; typ: TypeDesc; pm: Pager) =
   of tyUserFixed, tyTime, tyNone, tyTriple:
     discard "not implemented"
 
+proc toString*(p: SepValue; pm: Pager): string =
+  result = ""
+  addEntry(result, pointer p, TypeDesc(kind: tyString, size: 0i32), pm)
+
 proc addSepValue*(s: var string; p: SepValue; typ: TypeDesc) =
   addEntry(s, pointer(p), typ, nil)
 

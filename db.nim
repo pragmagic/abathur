@@ -84,7 +84,7 @@ when isMainModule:
 
   proc testA() =
     let pm = addr(pageMgr)
-    var attrMap = createPredicateMap(("salary", salary), ("tax", tax))
+    var attrMap = createPredicateMap()
 
     var db = Db()
     db.relations = @[]

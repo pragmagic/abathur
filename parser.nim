@@ -116,8 +116,8 @@ proc tselect(c; s, w: PNode): QStmt =
 proc tinsert(c; n): QStmt =
   if n.kind in nkCallKinds and n.len >= 2 and n[0].kind == nkIdent:
     # XXX support for named arguments here
-    result = tree(nkInsert, lit(n[0].ident.s))
-    for i in 1..<n.len: result.add texpr(c, n[i]))
+    result = tree(nkInsert, name(n[0].ident.s))
+    for i in 1..<n.len: result.add(texpr(c, n[i]))
   else:
     error n.info, "illformed 'insert' command"
 
@@ -164,13 +164,13 @@ proc ttable(c; n): QStmt =
   result = tree(nkTable)
   if n.len == 3 and n[1].kind == nkIdent and n[2].kind == nkStmtList:
     # add table name:
-    result.add lit(toIdent(n[1]))
+    result.add name(toIdent(n[1]))
     let fields = n[2]
     for f in fields:
       if f.kind in nkCallKinds and f.len == 2 and f[1].kind == nkStmtList:
         let attr = tree(nkAttrDef)
         attr.setAttrProps ttype(c, f[1])
-        attr.add lit(toIdent(f[0]))
+        attr.add name(toIdent(f[0]))
         result.add attr
       else:
         error f.info, "': type' expected"
