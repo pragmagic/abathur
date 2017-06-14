@@ -402,7 +402,7 @@ proc allocTempString*(s: string): SepValue =
 proc deallocTempString*(p: SepValue) =
   deallocMem(pointer p)
 
-template withTempString*(s: string; x, body: untyped) =
+template withTempString*(s: string; x, body: untyped) {.dirty.} =
   let x = allocTempString(s)
   body
   deallocTempString(x)

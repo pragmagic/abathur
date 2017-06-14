@@ -9,6 +9,7 @@ A genetically modified database
 - implement time handling routines
 - implement integer handling routines
 - implement string handling routines
+- select count, min, max support
 - perform integer conversions
 - check primary keys are declared correctly
 - optimize the case: key is "N, N+1, N+2, N+3, ..."

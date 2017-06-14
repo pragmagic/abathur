@@ -33,9 +33,6 @@ template cmp(x: pointer, y: SepValue): untyped =
 template cmp(x, y: SepValue): untyped =
   b.layout.cmp(pointer x, pointer y, b.pager)
 
-template myhigh(n: Node): int = MaxKeys+1
-#  if n.isInternal: n.layout.innerPairs else: n.layout.leafPairs
-
 template `[]`(n: Node; x: int): pointer = keyAt(n, x, b.layout)
 
 include follow
@@ -243,7 +240,7 @@ proc next(c: var QCursor; b: BTree; q: BTreeQuery) =
 
   nextImpl()
 
-proc next(c: var RCursor; b: BTree; q: Interval) =
+proc next*(c: var RCursor; b: BTree; q: Interval) =
   template leafAction() =
     for j in c.i+1 ..< x.m:
       if j >= c.ra and j <= c.rb:

@@ -100,6 +100,7 @@ insert person("Angelika", 7000, 50)
 insert person("Annette", 4000, 200)
 insert person("Ariane", 3000, 100)
 
+#[
 select ?rid, ?sid
 where:
   ?rsalary < ?ssalary
@@ -107,7 +108,7 @@ where:
   salary(?sid, ?ssalary)
   salary(?rid, ?rsalary)
   tax(?sid, ?stax)
-  tax(?rid, ?rtax)
+  tax(?rid, ?rtax) ]#
 """
     let myq = parse(attrMap, query)
     myq.run(db, output)

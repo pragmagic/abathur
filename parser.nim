@@ -20,7 +20,7 @@ type
   SymTab = ref object
     t: TStrTable
     types: TStrTable
-    vars, preds: int
+    vars: int
     cache: IdentCache
 
 {.experimental.}
@@ -64,16 +64,14 @@ proc tcmp(k: QStmtKind; c; n): QStmt =
 proc texpr(c; n): QStmt =
   case n.kind
   of nkIdent:
-    # should be a predicate:
-    var x = strTableGet(c.t, n.ident)
-    if x == nil or x.kind != skProc:
-      error n.info, "unknown predicate " & n.ident.s
-    else:
-      result = rel(x.position)
+    # should be a predicate, but we check this later in the VM:
+    result = name(n.ident.s)
   of nkStrLit..nkTripleStrLit:
     result = lit(n.strVal)
   of nkIntLit..nkInt64Lit:
     result = lit(n.intVal)
+  of nkDotExpr:
+    result = tree(nkDot, texpr(c, n[0]), texpr(c, n[1]))
   of nkCallKinds:
     if n[0].kind == nkIdent:
       case n[0].ident.s
@@ -117,14 +115,9 @@ proc tselect(c; s, w: PNode): QStmt =
 
 proc tinsert(c; n): QStmt =
   if n.kind in nkCallKinds and n.len >= 2 and n[0].kind == nkIdent:
-    # should be a predicate:
-    var x = strTableGet(c.t, n[0].ident)
-    if x == nil or x.kind != skTable:
-      error n.info, "unknown table " & n.ident.s
-    else:
-      # XXX support for named arguments here
-      result = tree(nkInsert, rel(x.position))
-      for i in 1..<n.len: result.add texpr(c, n[i]))
+    # XXX support for named arguments here
+    result = tree(nkInsert, lit(n[0].ident.s))
+    for i in 1..<n.len: result.add texpr(c, n[i]))
   else:
     error n.info, "illformed 'insert' command"
 
@@ -222,19 +215,12 @@ template declareType(name: string; k: pager.TypeKind; size: int) =
   s.offset = size
   strTableAdd(result.types, s)
 
-proc createPredicateMap*(x: varargs[(string, int)]): SymTab =
+proc createPredicateMap*(): SymTab =
   new result
   initStrTable(result.t)
   initStrTable(result.types)
   result.vars = 0
-  result.preds = 0
   result.cache = newIdentCache()
-  for a in x:
-    let attr = newSym(skProc, result.cache.getIdent(a[0]), nil,
-                      unknownLineInfo())
-    attr.position = a[1]
-    result.preds = max(result.preds, a[1])
-    strTableAdd(result.t, attr)
   declareType("string", pager.tyString, bestStringSize)
   declareType("int", pager.tyInt32, 4)
   declareType("int16", pager.tyInt16, 2)

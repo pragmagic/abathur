@@ -1,6 +1,5 @@
 
-import btree, pager
-from memops import storeMem
+import btree, pager, memops
 
 const
   MaxVars = 50
@@ -13,6 +12,7 @@ type
     nkEmpty,
     nkQueryList, # a list of queries
     nkLit,
+    nkName,
     nkRelation, # only for queries, not for the VM
     nkProc, # can do things like 'x + 1' or something else with a single value
     nkVarDef, # variable definition
@@ -25,6 +25,7 @@ type
     nkFor,
     nkYield,  # also an alias for 'select'
     nkIf,
+    nkDot,    # table.attribute for disambiguation
     nkInsert,
     nkTable,
     nkAttrDef,
@@ -34,13 +35,17 @@ type
     nkLt, nkLe, nkEq, nkNeq, nkGt, nkGe,
     nkAnd, nkOr, nkNot, nkBetween
 
+include schema
+
 type
   QStmt* = ref object
     case kind*: QStmtKind
     of nkEmpty: discard
-    of nkLit:
+    of nkLit, nkName:
       v: Value
-    of nkRelation: rid: int
+    of nkRelation:
+      rid: int
+      attrInfo: seq[AttrInfo]
     of nkProc: fn: proc (x: openArray[Value]): Value {.nimcall.}
     of nkVarDef, nkVarUse:
       varId: VarId
@@ -58,14 +63,6 @@ type
     names: array[VarId, string] # kept for debugging
     bindings: array[VarId, PinnedValue]
     vartypes: array[VarId, TypeDesc]
-
-  Db* = object
-    pm*: Pager
-    schema*: BTree # attribute descriptors; strings -> AttrAddress
-                   # string "" is special and contains in 'btree'
-                   # the number of BTrees and in 'offset' the actual
-                   # page number
-    relations*: seq[BTree]
 
 proc `[]`*(n: Qstmt; i: int): QStmt {.inline.} = n.kids[i]
 proc len*(n: QStmt): int {.inline.} = n.kids.len
@@ -161,8 +158,6 @@ proc unpinVars(p: Plan) =
     let n = x.n
     if n != nil: unpin(n)
 
-include schema
-
 proc exec(db: var DB; p: Plan; it: QStmt) =
   ## we can also translate a query plan at compile-time to a Nim program.
 
@@ -173,14 +168,20 @@ proc exec(db: var DB; p: Plan; it: QStmt) =
     for x in it: exec(db, p, x)
   of nkInsert:
     assert it[0].kind == nkRelation
+    let rel = it[0]
+    assert rel.attrInfo.len == it.len-1
     let r = it[0].rid
-    checkSameType(db.relations[r].layout.keyDesc, it[1].typ)
-    checkSameType(db.relations[r].layout.valDesc, it[2].typ)
-    let a = evalVal(p, it[1])
-    let b = evalVal(p, it[2])
-    db.relations[r].put(a, b)
-  of nkTable:
-    declareTable(db, it)
+    let key = evalVal(p, it[1])
+    let valSize = db.relations[r].layout.valDesc.size
+    let val = allocMem(pointer, valSize)
+    for i in 2 ..< it.len:
+      let b = evalVal(p, it[i])
+      let offset = rel.attrInfo[i].offset
+      # XXX implement string sharing in storeEntry
+      storeEntry(val +! offset, rel.attrInfo[i].typ, b, db.pm)
+    db.relations[r].put(key, SepValue val)
+    deallocMem(val)
+  of nkTable: discard
   of nkFor:
     let iter = it[^2]
     let body = it[^1]
@@ -262,6 +263,10 @@ proc `?!`(x: VarId): QStmt =
 
 proc lit*(x: Value): QStmt =
   result = atom(nkLit)
+  result.v = x
+
+proc name*(x: Value): QStmt =
+  result = atom(nkName)
   result.v = x
 
 proc lit*(x: int64): QStmt =
@@ -347,6 +352,8 @@ proc annotateTypes(q: QStmt; plan: Plan) =
   case q.kind
   of nkValues, nkKeys, nkPairs, nkCall, nkAsgn, nkProc, nkRelation, nkEmpty,
      nkPred, nkTable, nkAttrDef, nkIndex, nkInsert, nkQueryList: discard
+  of nkDot: assert false
+  of nkName: discard "implement me"
   of nkLit:
     assert q.typ.kind != tyNone
     q.compare = typeToCmp(q.typ.kind)
@@ -434,16 +441,87 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
   result = nested(res)
   annotateTypes(result, plan)
 
-proc tqueries(n: Query; db: Db; p: Plan): QStmt =
+proc declareTable(db: var Db; n: QStmt) =
+  assert infoSize() >= sizeof(AttrInfo)
+  assert infoSize() >= sizeof(RelationInfo)
+  assert infoSize() >= sizeof(MetaInfo)
+
+  assert n.kind == nkTable
+  assert n[0].kind == nkLit
+  var keyOffset = 0i32
+  var valOffset = 0i32
+  let btreeIdx = len(db.relations).int32
+
+  template incOffset(off) =
+    inc off, align - (off mod align)
+    aa.offset = off
+    inc off, aa.typ.size
+
+  var ri: RelationInfo
+  for i in 0..<n.len:
+    let it = n[i]
+    assert it.kind == nkAttrDef
+    assert it.len == 1
+    assert it[0].kind == nkLit
+    let attrName = it[0].v
+    var aa: AttrInfo
+    aa.btree = btreeIdx
+    aa.kind = SymKind.Attribute
+    aa.typ = it.typ
+    aa.ad = it.attr
+    aa.pos = i.int32
+    let align = getAlignment(aa.typ)
+    if aa.ad.keyPos == 0:
+      incOffset(valOffset)
+    else:
+      incOffset(keyOffset)
+      if ri.keyDesc.kind == tyNone: ri.keyDesc = aa.typ
+      else: doAssert false, "combined keys are not yet supported"
+    db.schema.put(attrName, SepValue(addr(aa)))
+
+  ri.kind = SymKind.Table
+  ri.idx = btreeIdx
+  ri.valSize = valOffset
+  putTableName(db, n[0].v, ri)
+  createRelation(db, ri)
+
+proc tqueries(n: Query; db: var Db; p: Plan): QStmt =
+  result = n
   case n.kind
   of nkSelect:
     result = compile(n, db, p)
   of nkQueryList:
-    result = n
     for i in 0..<n.len:
       n.kids[i] = tqueries(n.kids[i], db, p)
-  else:
-    result = n
+  of nkTable:
+    declareTable(db, n)
+  of nkInsert:
+    assert n[0].kind == nkName
+    let tab = getTable(db, n[0].v)
+    if tab.isEmpty:
+      withTempString(n[0].v, tname):
+        quit "unknown table " & tname
+    var relation = rel(tab.idx)
+    relation.attrInfo = newSeq[AttrInfo](n.len-1)
+    n.kids[0] = relation
+    for i in 1 ..< n.len:
+      let (attrName, attr) = getAttr(db, i.int32-1, tab)
+      if attr.isEmpty:
+        quit "no attribute for position " & $i
+      relation.attrInfo[i] = attr
+      if i == 1 and attr.ad.keyPos != 1:
+        withTempString(attrName, aname):
+          quit "key attribute expected, but found " & aname
+      annotateTypes(it[i], p)
+      checkSameType(attr.typ, it[i].typ)
+    # check that every attribute is covered:
+    let (attrName, attr) = getAttr(db, n.len.int32, tab)
+    if not attr.isEmpty:
+      withTempString(attrName, aname):
+        quit "no value given for attribute " & aname
+    # XXX insert additional inserts here to keep indexes up to date.
+    # XXX insert required type conversions here.
+  else: discard
 
 proc run*(q: Query; db: var Db; a: Action) =
   var p = Plan()

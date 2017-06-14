@@ -1,6 +1,14 @@
 # included from vm.nim
 
 type
+  Db* = object
+    pm*: Pager
+    schema*: BTree # attribute descriptors; strings -> AttrAddress
+                   # string "" is special and contains in 'btree'
+                   # the number of BTrees and in 'offset' the actual
+                   # page number
+    relations*: seq[BTree]
+
   SymKind* {.pure.} = enum
     Meta, Table, Index, Attribute
 
@@ -26,21 +34,26 @@ type
                              # so we use that
 template infoSize(): untyped = sizeof(BiggestInfoType).int32
 
+template getByName(typ, cond) {.dirty.} =
+  var cur = initRCursor(db.schema)
+  while true:
+    next(cur, db.schema, Interval(a: name, b: name, options: {maxIsMin}))
+    if atEnd(cur): break
+    let it = cast[ptr typ](getVal(cur, db.schema))
+    if cond:
+      result = it[]
+      break
 
-# We map the schema to a single relation to keep memory usage low.
-# However, this relation is hard to work with and speed critical to
-# access for the query engine and so we also have a completely
-# different representation in memory.
-# The memory specific parts start here:
-type
-  RelationRef* = ref object
-    info*: RelationInfo
-    attrs*: seq[AttrInfo]
+template isEmpty(x: AttrInfo|RelationInfo|MetaInfo): bool =
+  x.kind == SymKind.Meta
 
-proc getTable*(db: var Db; name: string): RelationInfo =
-  discard
+proc getTable*(db: var Db; name: SepValue): RelationInfo =
+  getByName(RelationInfo, it.kind == SymKind.Table)
 
-proc getAttr*(db: var Db; pos: int32; ri: RelationInfo): AttrInfo =
+proc getAttr*(db: var Db; name: SepValue; ri: RelationInfo): AttrInfo =
+  getByName(AttrInfo, it.kind == SymKind.Attribute and it.btree == ri.idx)
+
+proc getAttr*(db: var Db; pos: int32; ri: RelationInfo): (SepValue, AttrInfo) =
   var cur = initTCursor(db.schema)
   while true:
     next(cur, db.schema)
@@ -48,7 +61,8 @@ proc getAttr*(db: var Db; pos: int32; ri: RelationInfo): AttrInfo =
     let ai = cast[ptr AttrInfo](getVal(cur, db.schema))
     if ai.kind == SymKind.Attribute and ai.pos == pos and
         ai.btree == ri.idx:
-      result = ai[]
+      result[0] = SepValue getKey(cur, db.schema)
+      result[1] = ai[]
       break
 
 proc initSchema*(db: var Db) =
@@ -73,46 +87,3 @@ proc putTableName(db: var Db; name: SepValue; ri: RelationInfo) =
   storeMem(addr(b), unsafeAddr(ri), sizeof(ri))
   db.schema.put(name, SepValue(addr(b)))
 
-proc declareTable(db: var Db; n: QStmt) =
-  assert infoSize() >= sizeof(AttrInfo)
-  assert infoSize() >= sizeof(RelationInfo)
-  assert infoSize() >= sizeof(MetaInfo)
-
-  assert n.kind == nkTable
-  assert n[0].kind == nkLit
-  var keyOffset = 0i32
-  var valOffset = 0i32
-  let btreeIdx = len(db.relations).int32
-
-  template incOffset(off) =
-    inc off, align - (off mod align)
-    aa.offset = off
-    inc off, aa.typ.size
-
-  var ri: RelationInfo
-  for i in 0..<n.len:
-    let it = n[i]
-    assert it.kind == nkAttrDef
-    assert it.len == 1
-    assert it[0].kind == nkLit
-    let attrName = it[0].v
-    var aa: AttrInfo
-    aa.btree = btreeIdx
-    aa.kind = SymKind.Attribute
-    aa.typ = it.typ
-    aa.ad = it.attr
-    aa.pos = i.int32
-    let align = getAlignment(aa.typ)
-    if aa.ad.keyPos == 0:
-      incOffset(valOffset)
-    else:
-      incOffset(keyOffset)
-      if ri.keyDesc.kind == tyNone: ri.keyDesc = aa.typ
-      else: doAssert false, "combined keys are not yet supported"
-    db.schema.put(it[0].v, SepValue(addr(aa)))
-
-  ri.kind = SymKind.Table
-  ri.idx = btreeIdx
-  ri.valSize = valOffset
-  putTableName(db, n[0].v, ri)
-  createRelation(db, ri)

@@ -3,14 +3,14 @@
 ## interval search.
 
 type
-  IntervalOption = enum
+  IntervalOption* = enum
     minIsInf, maxIsInf,
     minExcluded, # <a
     maxExcluded, # <b
     maxIsMin # search for a single key
-  Interval = object
-    a, b: SepValue
-    options: set[IntervalOption]
+  Interval* = object
+    a*, b*: SepValue
+    options*: set[IntervalOption]
 #[
 binLowerBound(a, lo, hi, x)
   while lo <= hi:
