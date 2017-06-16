@@ -384,6 +384,13 @@ proc annotateTypes(q: QStmt; plan: Plan) =
     q.typ.kind = tyBool
     q.typ.size = 1
 
+proc lookupPred(db: Db; n: QStmt): int =
+  if n.kind == nkDot:
+    assert n.len == 2
+    assert n[0].kind == nkName
+    assert n[1].kind == nkName
+    
+
 proc compile(q: Query; db: Db; plan: Plan): QStmt =
   assert q.kind == nkSelect
   assert q.len == 2
@@ -400,7 +407,7 @@ proc compile(q: Query; db: Db; plan: Plan): QStmt =
       let subj = n[1].varId
       let obj = n[2].varId
       var iter = atom(nkPairs)
-      let pred = n[0].rid
+      let pred = lookupPred(db, n[0])
       iter.src = pred
       if subj in bound:
         if obj in bound:

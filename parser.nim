@@ -11,11 +11,6 @@ proc startsWith(n: PNode; s: string): bool =
 proc error(i: TLineInfo; msg: string) =
   echo i, " Error: ", msg
 
-const
-  skTable = skMethod
-  skIndex = skIterator
-  skAttr = skProc
-
 type
   SymTab = ref object
     t: TStrTable
