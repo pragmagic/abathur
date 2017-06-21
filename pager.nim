@@ -6,7 +6,7 @@
 ## ensure no page is unpaged that leaked pointers to the
 ## outside world (pin/unpin operations).
 
-import memops, tables
+import memops, tables, securehash
 
 const
   PageShift = 14
@@ -40,7 +40,7 @@ const
 # 16 = sizeof(NodeHeader)
 
 template isInternal*(n: Node): bool = (n.flags and isInternalFlag) != 0
-template setIsInternal*(n: Node) = n.flags = n.flags or isInternalFlag
+template setIsInternal(n: Node) = n.flags = n.flags or isInternalFlag
 template isDirty(n: Node): bool = (n.flags and isDirtyFlag) != 0
 template isHuge(n: Node): bool = (n.flags and isHugeFlag) != 0
 
@@ -123,6 +123,9 @@ proc fillNodeLayout*(n: var NodeLayout; keyDesc, valDesc: TypeDesc) =
   assert(sizeof(NodeHeader) + (n.keyDesc.size.int * n.leafPairs) <= n.valsOffset)
   assert(sizeof(NodeHeader) + (n.keyDesc.size.int * n.innerPairs) <= n.linksOffset)
 
+proc initNodeLayout*(keyDesc, valDesc: TypeDesc): NodeLayout =
+  fillNodeLayout(result, keyDesc, valDesc)
+
 template keyAt*(p: Node; i: int; n: NodeLayout): pointer =
   ## compute the address of the i'th key.
   p +! (sizeof(NodeHeader) + (n.keyDesc.size.int * i))
@@ -134,6 +137,10 @@ template valAt*(p: Node; i: int; n: NodeLayout): pointer =
 template linkAt*(p: Node; i: int; n: NodeLayout): pointer =
   ## compute the address of the i'th link.
   p +! (n.linksOffset + (sizeof(PageId) * i))
+
+template hashAt*(p: Node; i: int; n: NodeLayout): pointer =
+  ## compute the address of the i'th hash.
+  p +! (PageSize + (sizeof(SecureHash) * i))
 
 template pageIdAt*(p: Node; i: int; n: NodeLayout): PageId =
   ## compute the address of the i'th link.
@@ -310,10 +317,12 @@ proc rawFreshPage(pm: Pager; size: int32 = PageSize): Node =
   result.id = getNewPageId(pm)
   pm.totalMem += size
 
-proc pinFreshNode*(pm: Pager): Node =
+proc pinFreshNode*(pm: Pager; isInternal: bool; lay: NodeLayout): Node =
   ## You MUST call 'unpin' afterwards!
-  result = rawFreshPage(pm, PageSize)
+  let size = PageSize + isInternal.ord * (lay.innerPairs * sizeof(SecureHash))
+  result = rawFreshPage(pm, size.int32)
   pm.loaded[result.id] = result
+  if isInternal: setIsInternal(result)
 
 proc freshHugePage(pm: Pager; size: int32): ptr HugeNodeHeader =
   # Do NOT add to dirty pages here!

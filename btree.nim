@@ -16,11 +16,11 @@ type
     pager: Pager
   CursorState = enum stPop, stLeaf, stEnd
 
-proc newBTree*(root: PageId; keyDesc, valDesc: TypeDesc;
+proc newBTree*(root: PageId; layout: NodeLayout;
                cmp: Comparator;
                pager: Pager): BTree =
   result = BTree(root: root)
-  fillNodeLayout(result.layout, keyDesc, valDesc)
+  result.layout = layout
   result.layout.cmp = cmp
   result.pager = pager
 
@@ -292,9 +292,8 @@ proc split(h: Node; b: BTree): PageId =
   ## split node in half
   let mhalf = if h.isInternal: (b.layout.innerPairs shr 1)
               else: (b.layout.leafPairs shr 1)
-  let res = pinFreshNode(b.pager)
+  let res = pinFreshNode(b.pager, h.isInternal, b.layout)
   res.m = mhalf.int32
-  if h.isInternal: setIsInternal(res)
   h.m = mhalf.int32
   copyHalf(h, res, mhalf, b)
   # markDirty(b.pager, h)
@@ -412,9 +411,8 @@ proc put*(b: var BTree; key, val: SepValue) =
   if u == 0: return
 
   # need to split root
-  let t = pinFreshNode(b.pager)
+  let t = pinFreshNode(b.pager, true, b.layout)
   t.m = 2
-  setIsInternal(t)
   let root = pinNode(b.pager, b.root)
   let uu = pinNode(b.pager, u)
   #t.keys[0] = b.root.keys[0]
@@ -494,8 +492,9 @@ when isMainModule:
 
   proc main2 =
     let desc = TypeDesc(kind: tyInt32, size: 4)
-    let x = pinFreshNode(addr mgr)
-    var t = newBTree(x.id, desc, desc, cmpInt32, addr mgr)
+    let lay = initNodeLayout(desc, desc)
+    let x = pinFreshNode(addr mgr, false, lay)
+    var t = newBTree(x.id, lay, cmpInt32, addr mgr)
     unpin(x)
     for i in 1i32..50000i32:
       t.put(i, 50i32 - i)
@@ -503,8 +502,9 @@ when isMainModule:
 
   proc main3 =
     let desc = TypeDesc(kind: tyString, size: 16)
-    let x = pinFreshNode(addr mgr)
-    var t = newBTree(x.id, desc, desc, cmpStrings, addr mgr)
+    let lay = initNodeLayout(desc, desc)
+    let x = pinFreshNode(addr mgr, false, lay)
+    var t = newBTree(x.id, lay, cmpStrings, addr mgr)
     unpin(x)
     for i in 1i32..50000i32:
       let k = $i & "adflongerthan16charsherepleasebugtriggering"
@@ -527,8 +527,9 @@ when isMainModule:
 
   proc testDuplicateKeys =
     let desc = TypeDesc(kind: tyString, size: 16)
-    let x = pinFreshNode(addr mgr)
-    var t = newBTree(x.id, desc, desc, cmpStrings, addr mgr)
+    let lay = initNodeLayout(desc, desc)
+    let x = pinFreshNode(addr mgr, false, lay)
+    var t = newBTree(x.id, lay, cmpStrings, addr mgr)
     unpin(x)
     for i in 1i32..50000i32:
       let k = "adflongerthan16charsherepleasebugtriggering"

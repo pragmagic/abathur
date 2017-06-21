@@ -66,18 +66,20 @@ proc getAttr*(db: var Db; pos: int32; ri: RelationInfo): (SepValue, AttrInfo) =
       break
 
 proc initSchema*(db: var Db) =
-  let y = pinFreshNode(db.pm)
   let strTy = TypeDesc(kind: tyString, size: 16)
   let valTy = TypeDesc(kind: tyUserFixed, size: infoSize())
-  db.schema = newBTree(y.id, strTy, valTy, cmpStrings, db.pm)
+  let lay = initNodeLayout(strTy, valTy)
+  let y = pinFreshNode(db.pm, false, lay)
+  db.schema = newBTree(y.id, lay, cmpStrings, db.pm)
   unpin(y)
   db.relations = @[]
 
 proc createRelation(db: var Db; ri: RelationInfo) =
-  let y = pinFreshNode(db.pm)
   let valTy = TypeDesc(kind: tyUserFixed, size: ri.valSize)
+  let lay = initNodeLayout(ri.keyDesc, valTy)
+  let y = pinFreshNode(db.pm, false, lay)
   setLen(db.relations, ri.idx + 1)
-  db.relations[ri.idx] = newBTree(y.id, ri.keyDesc, valTy,
+  db.relations[ri.idx] = newBTree(y.id,lay,
                                   typeToCmp(ri.keyDesc.kind), db.pm)
   unpin(y)
 
