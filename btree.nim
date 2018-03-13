@@ -486,6 +486,31 @@ proc put*(t: var BTree; key: string; val: int32) =
   withTempString(key, k):
     t.put(k, toSepValue(val))
 
+proc toDisk(id: PageId; b: var BTree; filename: string; dest: var SecureHash) =
+  # go down in the tree but follow only the pointers we know are dirty.
+  if not isDirty(b.pager, id): return
+  let h = pinNode(b.pager, id)
+  if not h.isInternal:
+    dest = sha1(h, PageSize)
+    
+    for j in 0..<h.m:
+      result.add(indent)
+      result.addEntry(keyAt(h, j, b.layout), b.layout.keyDesc, b.pager)
+      result.add " "
+      result.addEntry(valAt(h, j, b.layout), b.layout.valDesc, b.pager)
+      result.add "\n"
+  else:
+    for j in 0..<h.m:
+      if j > 0:
+        result.add(indent & "(")
+        result.addEntry(keyAt(h, j, b.layout), b.layout.keyDesc, b.pager)
+        result.add ")\n"
+      toString(pageIdAt(h, j, b.layout), indent & "  ", result, b)
+  unpin(h)
+
+proc toDisk*(t: var BTree; filename: string) =
+  toDisk(t.id, t, filename)
+
 when isMainModule:
   var mgr: PageMgr
   initPageMgr(addr mgr, 1, ".")

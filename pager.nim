@@ -41,7 +41,7 @@ const
 
 template isInternal*(n: Node): bool = (n.flags and isInternalFlag) != 0
 template setIsInternal(n: Node) = n.flags = n.flags or isInternalFlag
-template isDirty(n: Node): bool = (n.flags and isDirtyFlag) != 0
+template isDirty*(n: Node): bool = (n.flags and isDirtyFlag) != 0
 template isHuge(n: Node): bool = (n.flags and isHugeFlag) != 0
 
 template getPageSize*(p: Node): int32 =
@@ -181,11 +181,10 @@ proc getNewPageId(pm: Pager): PageId =
 template toFilename(id): untyped = pm.dir & "/abathur_v1_" & $id & ".db"
 const rootFilename* = "abathur_v1_root.db"
 
-proc writeBack(pm: Pager; x: Node) =
+proc writeBack*(pm: Pager; x: Node; dest: string) =
   ## XXX distinguish between client/server here.
   x.flags = x.flags and not isDirtyFlag
   var f: File
-  let dest = toFilename(x.id)
   var err = false
   let size = getPageSize(x)
   if open(f, dest, fmWrite):
@@ -279,9 +278,14 @@ proc storeDirtyPages*(pm: Pager) =
   for i in 0..<pm.dirty.len:
     let p = pm.dirty[i]
     assert p.isDirty
-    writeBack(pm, p)
+    writeBack(pm, p, toFilename(p.id))
   if pm.overflowPage != nil and isDirty(pm.overflowPage):
-    writeBack(pm, pm.overflowPage)
+    writeBack(pm, pm.overflowPage, toFilename(pm.overflowPage.id))
+
+proc isDirty*(pm: Pager; id: PageId): bool =
+  let p = getOrDefault(pm.loaded, id)
+  if p != nil:
+    result = p.isDirty
 
 proc at(p: PageAddr; pm: Pager): pointer =
   ## address translation.
@@ -348,7 +352,7 @@ proc storeVla*(pm: Pager; p: pointer; size: int32): PageAddr =
   if pm.overflowPage == nil or target >= pm.overflowPage.size:
     if pm.overflowPage != nil:
       pm.totalMem -= pm.overflowPage.size
-      writeBack(pm, pm.overflowPage)
+      writeBack(pm, pm.overflowPage, toFilename(pm.overflowPage.id))
       deallocMem(pm.overflowPage)
     let s = roundup(max(OverflowPageSize, size+sizeof(HugeNodeHeader)), align)
     pm.overflowPage = freshHugePage(pm, s.int32)
